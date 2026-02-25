@@ -124,7 +124,7 @@ estate-sale-monitor/
 
 ## Image Analysis
 
-The image analyzer uses two complementary techniques:
+The image analyzer uses three complementary techniques:
 
 1. **Metadata inspection**: Reads EXIF tags (camera model, date taken, GPS location, description keywords) to find contextual clues about items in photos.
 
@@ -133,6 +133,8 @@ The image analyzer uses two complementary techniques:
    - Brightness and contrast profiles
    - Edge density (rough proxy for complexity/texture)
    - Aspect ratio and size characteristics
+
+3. **ViT image classification**: Uses Google's [Vision Transformer (ViT)](https://huggingface.co/google/vit-base-patch16-224) model via the `transformers` library to predict object/scene labels for each image. The predicted labels (e.g. `"rocking chair"`, `"tabby cat"`) are included in keyword matching, enabling image-based discovery even when listings lack descriptive text.
 
 Match scores are computed per-alert and items above a configurable threshold are included in notifications.
 
