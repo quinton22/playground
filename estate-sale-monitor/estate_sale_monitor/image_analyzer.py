@@ -18,6 +18,29 @@ except ImportError:  # pragma: no cover
     _PIL_AVAILABLE = False
     logger.warning("Pillow not installed; image analysis will be limited.")
 
+try:
+    from transformers import pipeline as _hf_pipeline
+    _TRANSFORMERS_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _TRANSFORMERS_AVAILABLE = False
+    logger.warning("transformers not installed; ViT image classification will be disabled.")
+
+_VIT_MODEL = "google/vit-base-patch16-224"
+_vit_classifier = None  # lazily initialised
+
+
+def _get_vit_classifier():
+    """Return a cached ViT image-classification pipeline, or ``None`` if unavailable."""
+    global _vit_classifier  # noqa: PLW0603
+    if not _TRANSFORMERS_AVAILABLE:
+        return None
+    if _vit_classifier is None:
+        try:
+            _vit_classifier = _hf_pipeline("image-classification", model=_VIT_MODEL)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Failed to load ViT model '%s': %s", _VIT_MODEL, exc)
+    return _vit_classifier
+
 
 @dataclass
 class ImageFeatures:
@@ -37,9 +60,12 @@ class ImageFeatures:
     contrast: float = 0.0     # standard deviation of luminance
     edge_density: float = 0.0  # fraction of high-gradient pixels (0–1)
 
+    # ViT classification labels (predicted object/scene classes)
+    vit_labels: List[str] = field(default_factory=list)
+
     def text_content(self) -> str:
         """Return all text-like features concatenated for keyword matching."""
-        parts = [self.exif_description] + self.exif_keywords + [self.exif_camera_model]
+        parts = [self.exif_description] + self.exif_keywords + [self.exif_camera_model] + self.vit_labels
         return " ".join(parts).lower()
 
 
@@ -106,6 +132,30 @@ def _edge_density(image: "Image.Image", threshold: int = 30) -> float:
                 edge_count += 1
             total += 1
     return edge_count / total if total > 0 else 0.0
+
+
+def _classify_with_vit(image: "Image.Image", top_k: int = 5) -> List[str]:
+    """Classify *image* using Google's ViT model and return the top predicted labels.
+
+    Returns an empty list if the ``transformers`` library is unavailable or if
+    the model cannot be loaded.
+
+    Args:
+        image: A PIL :class:`~PIL.Image.Image` to classify.
+        top_k: Number of top predictions to return.
+
+    Returns:
+        List of lowercase label strings (e.g. ``["rocking chair", "chair"]``).
+    """
+    classifier = _get_vit_classifier()
+    if classifier is None:
+        return []
+    try:
+        results = classifier(image, top_k=top_k)
+        return [r["label"].lower() for r in results]
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("ViT classification failed: %s", exc)
+        return []
 
 
 def analyze_image_file(path: str) -> Optional[ImageFeatures]:
@@ -184,6 +234,12 @@ def _analyze(img: "Image.Image") -> ImageFeatures:
         features.edge_density = _edge_density(img)
     except Exception as exc:
         logger.debug("Edge density extraction failed: %s", exc)
+
+    # --- ViT image classification ---
+    try:
+        features.vit_labels = _classify_with_vit(img)
+    except Exception as exc:
+        logger.debug("ViT classification failed: %s", exc)
 
     return features
 
