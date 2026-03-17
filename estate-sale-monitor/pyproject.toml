@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 estate-sale-monitor = "estate_sale_monitor.cli:main"
+civic-message-web = "estate_sale_monitor.civic_web:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
