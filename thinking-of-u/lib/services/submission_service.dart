@@ -150,6 +150,15 @@ class SubmissionService {
     String dateKey,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
   ) {
+    if (docs.isEmpty) {
+      return SubmissionModel(
+        submitterHash: submitterHash,
+        dateKey: dateKey,
+        targetHashes: const [],
+        submittedAt: DateTime.now().toUtc(),
+      );
+    }
+
     final targetHashes = docs.map((doc) => doc.id).toList();
     final submittedAt = (docs.first.data()['submittedAt'] as Timestamp?)
             ?.toDate()

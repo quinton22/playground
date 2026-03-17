@@ -38,7 +38,7 @@ class SubmissionModel extends Equatable {
     return SubmissionModel(
       submitterHash: submitterHash,
       dateKey: dateKey,
-      targetHashes: [doc.id],
+      targetHashes: List<String>.from(data['targetHashes'] as List? ?? []),
       submittedAt:
           (data['submittedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
