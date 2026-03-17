@@ -2,10 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:equatable/equatable.dart';
 
 /// Represents a user's daily "thinking of u" submission.
-/// 
+///
 /// Stored in Firestore under:
-///   `daily_submissions/{dateKey}/{submitterHash}`
-/// 
+///   `users/{submitterHash}/submissions/{targetHash}`
+///
 /// Where `dateKey` is formatted as "YYYY-MM-DD" in UTC.
 /// All phone references are stored as SHA-256 hashes.
 class SubmissionModel extends Equatable {
@@ -38,7 +38,7 @@ class SubmissionModel extends Equatable {
     return SubmissionModel(
       submitterHash: submitterHash,
       dateKey: dateKey,
-      targetHashes: List<String>.from(data['targetHashes'] as List? ?? []),
+      targetHashes: [doc.id],
       submittedAt:
           (data['submittedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
@@ -46,9 +46,8 @@ class SubmissionModel extends Equatable {
 
   Map<String, dynamic> toFirestore() {
     return {
-      'targetHashes': targetHashes,
+      'dateKey': dateKey,
       'submittedAt': Timestamp.fromDate(submittedAt),
-      'count': targetHashes.length,
     };
   }
 

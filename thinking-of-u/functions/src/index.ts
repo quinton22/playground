@@ -54,105 +54,100 @@ async function sendPushNotification(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const onSubmissionWritten = functions.firestore
-  .document("daily_submissions/{dateKey}/submissions/{submitterHash}")
+  .document("users/{submitterHash}/submissions/{targetHash}")
   .onWrite(async (change, context) => {
-    const { dateKey, submitterHash } = context.params as {
-      dateKey: string;
+    const { submitterHash, targetHash } = context.params as {
       submitterHash: string;
+      targetHash: string;
     };
 
     const newData = change.after.exists ? change.after.data() : null;
     if (!newData) return; // deletion — nothing to do
 
-    const targetHashes: string[] = newData.targetHashes ?? [];
-    if (targetHashes.length === 0) return;
+    const dateKey = (newData.dateKey as string | undefined) ?? "";
+    if (!dateKey) return;
 
     functions.logger.info(
-      `Checking matches for submitter=${submitterHash} on date=${dateKey}`
+      `Checking match for submitter=${submitterHash}, target=${targetHash}, date=${dateKey}`
     );
 
-    // For each target the submitter added, check if the target also submitted
-    // the submitter's hash
-    for (const targetHash of targetHashes) {
-      // Check if we've already recorded this match
-      const matchId = [submitterHash, targetHash].sort().join("_");
-      const matchRef = db
-        .collection("matches")
-        .doc(dateKey)
-        .collection("match_records")
-        .doc(matchId);
+    // Check if we've already recorded this match
+    const matchId = [submitterHash, targetHash].sort().join("_");
+    const matchRef = db
+      .collection("matches")
+      .doc(dateKey)
+      .collection("match_records")
+      .doc(matchId);
 
-      const existingMatch = await matchRef.get();
-      if (existingMatch.exists) continue; // already processed
+    const existingMatch = await matchRef.get();
+    if (existingMatch.exists) return; // already processed
 
-      // Check if target submitted the submitter
-      const targetSubmissionRef = db
-        .collection("daily_submissions")
-        .doc(dateKey)
-        .collection("submissions")
-        .doc(targetHash);
+    // Check if target submitted the submitter
+    const targetSubmissionRef = db
+      .collection("users")
+      .doc(targetHash)
+      .collection("submissions")
+      .doc(submitterHash);
 
-      const targetSubmission = await targetSubmissionRef.get();
-      if (!targetSubmission.exists) continue;
+    const targetSubmission = await targetSubmissionRef.get();
+    if (!targetSubmission.exists) return;
 
-      const targetData = targetSubmission.data();
-      const targetTargetHashes: string[] = targetData?.targetHashes ?? [];
+    const targetData = targetSubmission.data();
+    const targetDateKey = (targetData?.dateKey as string | undefined) ?? "";
+    if (targetDateKey !== dateKey) return;
 
-      if (!targetTargetHashes.includes(submitterHash)) continue;
+    // 🎉 It's a match!
+    functions.logger.info(`Match found: ${submitterHash} <-> ${targetHash}`);
 
-      // 🎉 It's a match!
-      functions.logger.info(`Match found: ${submitterHash} <-> ${targetHash}`);
+    // Fetch both users' display names and FCM tokens
+    const [user1Doc, user2Doc] = await Promise.all([
+      db.collection("users").doc(submitterHash).get(),
+      db.collection("users").doc(targetHash).get(),
+    ]);
 
-      // Fetch both users' display names and FCM tokens
-      const [user1Doc, user2Doc] = await Promise.all([
-        db.collection("users").doc(submitterHash).get(),
-        db.collection("users").doc(targetHash).get(),
-      ]);
+    const user1Data = user1Doc.data();
+    const user2Data = user2Doc.data();
 
-      const user1Data = user1Doc.data();
-      const user2Data = user2Doc.data();
+    const user1Name: string = user1Data?.displayName ?? "Someone";
+    const user2Name: string = user2Data?.displayName ?? "Someone";
+    const user1Token: string = user1Data?.fcmToken ?? "";
+    const user2Token: string = user2Data?.fcmToken ?? "";
 
-      const user1Name: string = user1Data?.displayName ?? "Someone";
-      const user2Name: string = user2Data?.displayName ?? "Someone";
-      const user1Token: string = user1Data?.fcmToken ?? "";
-      const user2Token: string = user2Data?.fcmToken ?? "";
+    // Write the match record
+    await matchRef.set({
+      user1Hash: submitterHash,
+      user2Hash: targetHash,
+      user1DisplayName: user1Name,
+      user2DisplayName: user2Name,
+      matchedAt: admin.firestore.FieldValue.serverTimestamp(),
+      notificationsSent: false,
+      participants: [submitterHash, targetHash],
+    });
 
-      // Write the match record
-      await matchRef.set({
-        user1Hash: submitterHash,
-        user2Hash: targetHash,
-        user1DisplayName: user1Name,
-        user2DisplayName: user2Name,
-        matchedAt: admin.firestore.FieldValue.serverTimestamp(),
-        notificationsSent: false,
-        participants: [submitterHash, targetHash],
-      });
+    // Update match counts and streaks for both users
+    await Promise.all([
+      updateUserMatchStats(submitterHash),
+      updateUserMatchStats(targetHash),
+    ]);
 
-      // Update match counts and streaks for both users
-      await Promise.all([
-        updateUserMatchStats(submitterHash),
-        updateUserMatchStats(targetHash),
-      ]);
+    // Send push notifications to both users
+    await Promise.all([
+      sendPushNotification(
+        user1Token,
+        "💕 Thinking of U Match!",
+        `${user2Name} was thinking of you too! 🎉`,
+        { type: "match", dateKey, matchId }
+      ),
+      sendPushNotification(
+        user2Token,
+        "💕 Thinking of U Match!",
+        `${user1Name} was thinking of you too! 🎉`,
+        { type: "match", dateKey, matchId }
+      ),
+    ]);
 
-      // Send push notifications to both users
-      await Promise.all([
-        sendPushNotification(
-          user1Token,
-          "💕 Thinking of U Match!",
-          `${user2Name} was thinking of you too! 🎉`,
-          { type: "match", dateKey, matchId }
-        ),
-        sendPushNotification(
-          user2Token,
-          "💕 Thinking of U Match!",
-          `${user1Name} was thinking of you too! 🎉`,
-          { type: "match", dateKey, matchId }
-        ),
-      ]);
-
-      // Mark notifications as sent
-      await matchRef.update({ notificationsSent: true });
-    }
+    // Mark notifications as sent
+    await matchRef.update({ notificationsSent: true });
   });
 
 // ─────────────────────────────────────────────────────────────────────────────

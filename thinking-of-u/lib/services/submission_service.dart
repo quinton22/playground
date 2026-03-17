@@ -7,7 +7,7 @@ import '../utils/crypto_utils.dart';
 /// Service for managing daily "thinking of u" submissions.
 ///
 /// Firestore structure:
-/// - `daily_submissions/{dateKey}/{submitterHash}` — submission docs
+/// - `users/{submitterHash}/submissions/{targetHash}` — submission docs
 /// - `matches/{dateKey}/{matchId}` — match docs (written by Cloud Functions)
 ///
 /// [dateKey] is formatted as "YYYY-MM-DD" in UTC.
@@ -16,6 +16,19 @@ class SubmissionService {
 
   SubmissionService({FirebaseFirestore? db})
       : _db = db ?? FirebaseFirestore.instance;
+
+  CollectionReference<Map<String, dynamic>> _submissionsForUser(
+    String submitterHash,
+  ) =>
+      _db
+          .doc(userDocPath(submitterHash))
+          .collection('submissions');
+
+  static String userDocPath(String submitterHash) =>
+      'users/$submitterHash';
+
+  static String submissionDocPath(String submitterHash, String targetHash) =>
+      '${userDocPath(submitterHash)}/submissions/$targetHash';
 
   /// Get the current UTC date key (YYYY-MM-DD).
   static String currentDateKey() {
@@ -29,19 +42,13 @@ class SubmissionService {
   Future<SubmissionModel?> getTodaysSubmission(String submitterHash) async {
     final dateKey = currentDateKey();
     try {
-      final doc = await _db
-          .collection('daily_submissions')
-          .doc(dateKey)
-          .collection('submissions')
-          .doc(submitterHash)
+      final snapshot = await _submissionsForUser(submitterHash)
+          .where('dateKey', isEqualTo: dateKey)
+          .orderBy('submittedAt', descending: true)
           .get();
 
-      if (!doc.exists) return null;
-      return SubmissionModel.fromFirestore(
-        doc as DocumentSnapshot<Map<String, dynamic>>,
-        submitterHash,
-        dateKey,
-      );
+      if (snapshot.docs.isEmpty) return null;
+      return _toSubmissionModel(submitterHash, dateKey, snapshot.docs);
     } catch (e) {
       debugPrint('Error fetching submission: $e');
       return null;
@@ -51,19 +58,13 @@ class SubmissionService {
   /// Stream today's submission for real-time updates.
   Stream<SubmissionModel?> watchTodaysSubmission(String submitterHash) {
     final dateKey = currentDateKey();
-    return _db
-        .collection('daily_submissions')
-        .doc(dateKey)
-        .collection('submissions')
-        .doc(submitterHash)
+    return _submissionsForUser(submitterHash)
+        .where('dateKey', isEqualTo: dateKey)
+        .orderBy('submittedAt', descending: true)
         .snapshots()
-        .map((doc) {
-      if (!doc.exists) return null;
-      return SubmissionModel.fromFirestore(
-        doc as DocumentSnapshot<Map<String, dynamic>>,
-        submitterHash,
-        dateKey,
-      );
+        .map((snapshot) {
+      if (snapshot.docs.isEmpty) return null;
+      return _toSubmissionModel(submitterHash, dateKey, snapshot.docs);
     });
   }
 
@@ -88,52 +89,33 @@ class SubmissionService {
     }
 
     final dateKey = currentDateKey();
-    final ref = _db
-        .collection('daily_submissions')
-        .doc(dateKey)
-        .collection('submissions')
-        .doc(submitterHash);
+    final submissions = await _submissionsForUser(submitterHash)
+        .where('dateKey', isEqualTo: dateKey)
+        .get();
 
-    return await _db.runTransaction<SubmissionModel>((transaction) async {
-      final snapshot = await transaction.get(ref);
+    final existingTargets = submissions.docs.map((doc) => doc.id).toSet();
 
-      List<String> existingTargets = [];
-      if (snapshot.exists) {
-        existingTargets =
-            List<String>.from(snapshot.data()?['targetHashes'] as List? ?? []);
-      }
+    if (existingTargets.length >= maxTargets) {
+      throw Exception('You\'ve reached your daily limit of $maxTargets sends.');
+    }
 
-      if (existingTargets.length >= maxTargets) {
-        throw Exception(
-            'You\'ve reached your daily limit of $maxTargets sends.');
-      }
+    if (existingTargets.contains(targetHash)) {
+      throw Exception('You\'re already thinking of this person today!');
+    }
 
-      if (existingTargets.contains(targetHash)) {
-        throw Exception('You\'re already thinking of this person today!');
-      }
-
-      existingTargets.add(targetHash);
-      final now = DateTime.now().toUtc();
-
-      final updatedData = {
-        'targetHashes': existingTargets,
-        'submittedAt': Timestamp.fromDate(now),
-        'count': existingTargets.length,
-      };
-
-      if (snapshot.exists) {
-        transaction.update(ref, updatedData);
-      } else {
-        transaction.set(ref, updatedData);
-      }
-
-      return SubmissionModel(
-        submitterHash: submitterHash,
-        dateKey: dateKey,
-        targetHashes: existingTargets,
-        submittedAt: now,
-      );
+    final now = DateTime.now().toUtc();
+    await _db.doc(submissionDocPath(submitterHash, targetHash)).set({
+      'dateKey': dateKey,
+      'submittedAt': Timestamp.fromDate(now),
     });
+
+    existingTargets.add(targetHash);
+    return SubmissionModel(
+      submitterHash: submitterHash,
+      dateKey: dateKey,
+      targetHashes: existingTargets.toList(),
+      submittedAt: now,
+    );
   }
 
   /// Remove a target from today's submission (undo).
@@ -142,36 +124,43 @@ class SubmissionService {
     required String targetHash,
   }) async {
     final dateKey = currentDateKey();
-    final ref = _db
-        .collection('daily_submissions')
-        .doc(dateKey)
-        .collection('submissions')
-        .doc(submitterHash);
+    final ref = _db.doc(submissionDocPath(submitterHash, targetHash));
+    final snapshot = await ref.get();
+    if (!snapshot.exists) {
+      throw Exception('No submission found for today.');
+    }
 
-    return await _db.runTransaction<SubmissionModel>((transaction) async {
-      final snapshot = await transaction.get(ref);
-      if (!snapshot.exists) {
-        throw Exception('No submission found for today.');
-      }
+    final submissionDateKey = snapshot.data()?['dateKey'] as String? ?? '';
+    if (submissionDateKey != dateKey) {
+      throw Exception('No submission found for today.');
+    }
 
-      final targets =
-          List<String>.from(snapshot.data()?['targetHashes'] as List? ?? []);
-      targets.remove(targetHash);
+    await ref.delete();
+    return (await getTodaysSubmission(submitterHash)) ??
+        SubmissionModel(
+          submitterHash: submitterHash,
+          dateKey: dateKey,
+          targetHashes: const [],
+          submittedAt: DateTime.now().toUtc(),
+        );
+  }
 
-      final now = DateTime.now().toUtc();
-      transaction.update(ref, {
-        'targetHashes': targets,
-        'submittedAt': Timestamp.fromDate(now),
-        'count': targets.length,
-      });
-
-      return SubmissionModel(
-        submitterHash: submitterHash,
-        dateKey: dateKey,
-        targetHashes: targets,
-        submittedAt: now,
-      );
-    });
+  SubmissionModel _toSubmissionModel(
+    String submitterHash,
+    String dateKey,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final targetHashes = docs.map((doc) => doc.id).toList();
+    final submittedAt = (docs.first.data()['submittedAt'] as Timestamp?)
+            ?.toDate()
+            .toUtc() ??
+        DateTime.now().toUtc();
+    return SubmissionModel(
+      submitterHash: submitterHash,
+      dateKey: dateKey,
+      targetHashes: targetHashes,
+      submittedAt: submittedAt,
+    );
   }
 
   /// Get all matches for a user across all dates.
