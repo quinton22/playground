@@ -113,7 +113,7 @@ def make_handler(subject_store_path: str):
             )
             self._write_html(payload)
 
-        def log_message(self, format: str, *args) -> None:  # noqa: A003
+        def log_message(self, format_string: str, *args) -> None:
             return
 
         def _write_html(self, payload: str) -> None:

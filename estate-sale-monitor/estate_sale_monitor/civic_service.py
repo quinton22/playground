@@ -126,7 +126,7 @@ def generate_issue_message(
     """Generate an AI-style draft message on a current issue."""
     normalized_subject = subject.strip() or "community concerns"
     concern = user_concern.strip() or "I would appreciate your leadership on this issue."
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     return (
         f"Subject: Support needed on {normalized_subject}\n\n"
         f"Dear {lawmaker.name},\n\n"
@@ -135,7 +135,7 @@ def generate_issue_message(
         f"{', '.join(CURRENT_SUBJECTS[:3]).lower()}.\n\n"
         f"{concern}\n\n"
         "Please share what actions your office is taking and how residents can stay involved.\n\n"
-        f"Sincerely,\nConcerned Resident\n\nDraft generated on {timestamp}."
+        f"Sincerely,\nConcerned Resident\n\nDraft generated on {current_date}."
     )
 
 
