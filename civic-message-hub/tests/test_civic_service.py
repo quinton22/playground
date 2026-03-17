@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from estate_sale_monitor.civic_service import (
+from civic_message_hub.civic_service import (
     LawmakerContact,
     add_subject,
     generate_issue_message,
