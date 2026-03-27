@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "civic-message-hub"
+version = "0.1.0"
+description = "Website for finding local lawmaker contacts, generating civic outreach messages, and sharing issue subjects"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+civic-message-web = "civic_message_hub.civic_web:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["civic_message_hub*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
