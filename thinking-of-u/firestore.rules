@@ -49,26 +49,36 @@ service cloud.firestore {
               .hasAny(['dailyLimit', 'totalMatches', 'currentStreak', 'longestStreak',
                        'extensionDaysRemaining', 'dailySendsRemaining']));
       allow delete: if isOwner(phoneHash);
-    }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // daily_submissions/{dateKey}/submissions/{submitterHash}
-    // ─────────────────────────────────────────────────────────────────────
+      // ───────────────────────────────────────────────────────────────────
+      // users/{phoneHash}/submissions/{targetHash}
+      // ───────────────────────────────────────────────────────────────────
 
-    match /daily_submissions/{dateKey}/submissions/{submitterHash} {
-      // Only the submitter can read/write their own submissions.
-      // The target hashes are stored (hashed), so other users cannot enumerate
-      // who was submitted.
-      allow read: if isOwner(submitterHash);
-      allow create: if isOwner(submitterHash)
-        && request.resource.data.keys().hasAll(['targetHashes', 'submittedAt'])
-        && request.resource.data.targetHashes is list
-        && request.resource.data.targetHashes.size() <= 10; // max limit
-      allow update: if isOwner(submitterHash)
-        && request.resource.data.keys().hasAll(['targetHashes', 'submittedAt'])
-        && request.resource.data.targetHashes is list
-        && request.resource.data.targetHashes.size() <= 10;
-      allow delete: if false; // Never allow client-side deletion of submissions
+      match /submissions/{targetHash} {
+        // Only the owner can read/write their own submissions.
+        // The submitted target is represented by the document ID (hashed).
+        allow read: if isOwner(phoneHash);
+        allow create: if isOwner(phoneHash)
+          && request.resource.data.keys().hasAll(['dateKey', 'submittedAt'])
+          && request.resource.data.dateKey is string
+          && request.resource.data.submittedAt is timestamp;
+        allow update: if isOwner(phoneHash)
+          && request.resource.data.keys().hasAll(['dateKey', 'submittedAt'])
+          && request.resource.data.dateKey is string
+          && request.resource.data.submittedAt is timestamp;
+        allow delete: if isOwner(phoneHash);
+      }
+
+      // ───────────────────────────────────────────────────────────────────
+      // users/{phoneHash}/purchases/{purchaseId}
+      // ───────────────────────────────────────────────────────────────────
+
+      match /purchases/{purchaseId} {
+        // Only the owner can read their own purchase records.
+        // Writes are handled by Cloud Functions (server-side verification).
+        allow read: if isOwner(phoneHash);
+        allow write: if false; // Only Cloud Functions write purchases
+      }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -82,18 +92,6 @@ service cloud.firestore {
         && (resource.data.user1Hash == callerPhoneHash()
             || resource.data.user2Hash == callerPhoneHash());
       allow write: if false; // Only Cloud Functions write matches
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // purchases/{purchaseId}
-    // ─────────────────────────────────────────────────────────────────────
-
-    match /purchases/{purchaseId} {
-      // Only the owner can read their own purchase records.
-      // Writes are handled by Cloud Functions (server-side verification).
-      allow read: if isAuthenticated()
-        && resource.data.userHash == callerPhoneHash();
-      allow write: if false; // Only Cloud Functions write purchases
     }
 
     // ─────────────────────────────────────────────────────────────────────

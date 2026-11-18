@@ -17,5 +17,19 @@ void main() {
           '${now.day.toString().padLeft(2, '0')}';
       expect(dateKey, equals(expected));
     });
+
+    test('userDocPath uses users/{userHash}', () {
+      expect(
+        SubmissionService.userDocPath('abc123'),
+        equals('users/abc123'),
+      );
+    });
+
+    test('submissionDocPath uses users/{userHash}/submissions/{targetHash}', () {
+      expect(
+        SubmissionService.submissionDocPath('abc123', 'def456'),
+        equals('users/abc123/submissions/def456'),
+      );
+    });
   });
 }
