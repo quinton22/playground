@@ -26,6 +26,9 @@ Only when asked: create a new top-level directory with a clear kebab-case name c
 | Directory | Description | Stack |
 |---|---|---|
 | `estate-sale-monitor/` | Scrapes estate sale sites, analyzes images, and alerts on matches | Python (`pip install -e .`, tests with `pytest`) |
+| `civic-message-hub/` | Website to find local lawmaker contacts and draft outreach messages | Python (`pyproject.toml`, tests in `tests/`) |
+| `taskweave/` | Collaborative todo app with SMS-based task suggestions | Flutter/Dart (`flutter test`) |
+| `thinking-of-u/` | Private mutual "thinking of you" matching app | Flutter/Dart + Firebase (`flutter test`) |
 
 ## Git
 
