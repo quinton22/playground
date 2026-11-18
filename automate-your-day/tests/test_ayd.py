@@ -200,3 +200,10 @@ def test_cli_unknown_task(tmp_path):
     p = write_cfg(tmp_path)
     assert main(["-c", str(p), "run", "nope"]) == 1
     assert main(["-c", str(p), "schedule"]) == 0
+
+
+def test_check_warns_on_missing_limits(tmp_path, capsys):
+    p = write_cfg(tmp_path, '[tasks.a]\ndo="x"\n[tasks.b]\ndo="y"\nlimits="read-only"\n')
+    assert main(["-c", str(p), "check"]) == 0
+    err = capsys.readouterr().err
+    assert "task 'a' has no limits" in err and "task 'b'" not in err

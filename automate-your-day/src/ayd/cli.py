@@ -54,6 +54,10 @@ def cmd_check(args) -> int:
     print(f"config: {cfg.path}\ndata:   {cfg.data_dir}\nagent:  {cfg.agent}")
     for t in cfg.tasks.values():
         print(f"task {t.name:<14} {t.when:<16} {'cron ' + t.cron if t.cron else 'manual'}")
+    for t in cfg.tasks.values():
+        if not t.limits:
+            print(f"warning: task '{t.name}' has no limits; the agent will be told to ask before any outward-facing action",
+                  file=sys.stderr)
     if cfg.wrapup:
         w = cfg.wrapup
         print(f"wrapup {'':<12} {w.when:<16} {'cron ' + w.cron if w.cron else 'manual'}"
