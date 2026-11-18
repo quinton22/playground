@@ -14,6 +14,14 @@ WHEN_HELP = (
 )
 
 
+def parse_duration(value: str) -> int:
+    """'90s' | '30m' | '2h' -> seconds. Raises ValueError."""
+    m = re.fullmatch(r"(\d+)([smh])", value.strip().lower())
+    if not m or int(m.group(1)) == 0:
+        raise ValueError(f"bad duration {value!r} (use e.g. 90s, 30m, 2h)")
+    return int(m.group(1)) * {"s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
 def parse_when(value: str) -> str | None:
     """Return a 5-field cron expression, or None for manual tasks. Raises ValueError."""
     s = value.strip().lower()

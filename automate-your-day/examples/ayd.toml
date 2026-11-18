@@ -15,11 +15,15 @@ via = "Atlassian connector (Jira)"
 repos = ["~/code/billing-service", "~/code/web-app"]
 limits = "Commit and push to feature branches only. Never open PRs, never touch main."
 when = "weekdays 09:30"
+requires = ["email", "no-questions:email"]   # only after email ran today with nothing open
 
-[tasks.standup-notes]
-do = "Summarize yesterday's journal into standup bullets"
-limits = "Read-only; print to the terminal."
-when = "manual"
+[tasks.reviews]
+do = "Review PRs that request my review; write findings as a pending review"
+via = "GitHub connector"
+limits = "Pending/draft review only. Never submit, approve, or merge."
+approval = "ask"            # agent proposes; you run `ayd approve`
+timeout = "30m"
+when = "weekdays 11:00"
 
 [wrapup]
 when = "weekdays 17:30"
@@ -27,3 +31,11 @@ covers = "today"
 scan = ["sent email (Outlook)", "Slack messages I sent", "calendar meetings I attended"]
 ask_user = true
 notify = "notify-send ayd \"$AYD_MESSAGE\""
+
+[digest]
+when = "weekdays 08:45"
+notify = "notify-send ayd \"$AYD_MESSAGE\""
+
+[rollup]
+when = "fri 17:45"
+covers = "this-week"

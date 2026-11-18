@@ -1,6 +1,7 @@
 """Compact per-day journal: journal/YYYY-MM-DD.ayd, one `kind|HH:MM|task|text` record per line.
 
-kinds: A = agent did, U = user did, N = next step, Q = open question for the user.
+kinds: A = agent did, U = user did, N = next step, Q = open question for the user,
+W = notable accomplishment/impact (metric, shipped, unblocked others).
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from .config import Config
 
-KINDS = ("A", "U", "N", "Q")
+KINDS = ("A", "U", "N", "Q", "W")
 
 
 def clean(text: str) -> str:

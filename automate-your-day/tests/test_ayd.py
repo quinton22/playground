@@ -186,7 +186,7 @@ def test_cli_run_failure_is_logged(tmp_path):
     p = write_cfg(tmp_path, agent="false")
     assert main(["-c", str(p), "run", "email"]) == 1
     files = list((tmp_path / "data" / "journal").glob("*.ayd"))
-    assert files and "FAILED agent exit 1" in files[0].read_text()
+    assert files and "FAILED (failed, exit 1)" in files[0].read_text()
 
 
 def test_cli_wrapup_noninteractive_leaves_question(tmp_path, monkeypatch):

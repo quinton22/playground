@@ -41,7 +41,8 @@ def path(cfg: Config, slug: str) -> Path:
     return cfg.tracks_dir / f"{slug}.ayd"
 
 
-def _write(p: Path, meta: dict[str, str], entries: list[str]) -> None:
+def save(cfg: Config, slug: str, meta: dict[str, str], entries: list[str]) -> None:
+    p = path(cfg, slug)
     p.parent.mkdir(parents=True, exist_ok=True)
     lines = ["#ayd1 track"] + [f"@{k}={clean(v)}" for k, v in meta.items()] + entries
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -83,7 +84,7 @@ def create(cfg: Config, slug: str, title: str, due: str | None = None) -> Track:
     if due:
         _check_meta("due", due)
         meta["due"] = due
-    _write(p, meta, [])
+    save(cfg, slug, meta, [])
     return load(cfg, slug)
 
 
@@ -91,7 +92,7 @@ def set_meta(cfg: Config, slug: str, key: str, value: str) -> None:
     t = load(cfg, slug)
     _check_meta(key, value)
     t.meta[key] = value
-    _write(path(cfg, slug), t.meta, t.entries)
+    save(cfg, slug, t.meta, t.entries)
 
 
 def append(cfg: Config, slug: str, kind: str, text: str, now: datetime) -> None:
@@ -121,3 +122,19 @@ def render(t: Track, tail: int = 12) -> str:
     if len(t.entries) > len(shown):
         lines.append(f"(+{len(t.entries) - len(shown)} earlier entries in tracks/{t.slug}.ayd)")
     return "\n".join(lines + shown)
+
+
+def deadlines(cfg: Config, today: date, within: int) -> list[tuple[int, Track]]:
+    """(days_left, track) for non-done tracks due within `within` days (negative = overdue)."""
+    out = []
+    for t in active(cfg):
+        due = t.meta.get("due")
+        if due:
+            left = (date.fromisoformat(due) - today).days
+            if left <= within:
+                out.append((left, t))
+    return sorted(out, key=lambda x: x[0])
+
+
+def deadline_text(left: int) -> str:
+    return f"OVERDUE by {-left}d" if left < 0 else "due today" if left == 0 else f"due in {left}d"
