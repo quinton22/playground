@@ -1,0 +1,29 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "match_records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "user1Hash", "order": "ASCENDING" },
+        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "match_records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "user2Hash", "order": "ASCENDING" },
+        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "match_records",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "participants", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

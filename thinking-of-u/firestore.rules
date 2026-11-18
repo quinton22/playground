@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Helper functions
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Returns true if the request is from a signed-in user.
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    /// Returns the SHA-256 hash of the authenticated user's phone number.
+    /// NOTE: The client stores the phoneHash in the auth token's custom claims
+    /// OR we derive it from the uid for phone-auth users.
+    /// In practice, after sign-in, we use the user's phoneHash (stored in
+    /// custom claims set by Cloud Functions) to validate ownership.
+    function callerPhoneHash() {
+      return request.auth.token.phoneHash;
+    }
+
+    /// Returns true if the caller owns the document (document ID == phoneHash).
+    function isOwner(docId) {
+      return isAuthenticated() && callerPhoneHash() == docId;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // users/{phoneHash}
+    // ─────────────────────────────────────────────────────────────────────
+
+    match /users/{phoneHash} {
+      // Only the owner can read or write their own profile.
+      // Cloud Functions can read all (admin SDK bypasses rules).
+      allow read: if isOwner(phoneHash);
+      allow create: if isOwner(phoneHash)
+        && request.resource.data.keys().hasAll(['displayName', 'dailyLimit', 'dailySendsRemaining', 'createdAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 30
+        && request.resource.data.dailyLimit is int
+        && request.resource.data.dailyLimit >= 1
+        && request.resource.data.dailyLimit <= 10;
+      allow update: if isOwner(phoneHash)
+        // Users can update their name, FCM token, and reset time
+        // but cannot change dailyLimit themselves (only Cloud Functions can)
+        && (!request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['dailyLimit', 'totalMatches', 'currentStreak', 'longestStreak',
+                       'extensionDaysRemaining', 'dailySendsRemaining']));
+      allow delete: if isOwner(phoneHash);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // daily_submissions/{dateKey}/submissions/{submitterHash}
+    // ─────────────────────────────────────────────────────────────────────
+
+    match /daily_submissions/{dateKey}/submissions/{submitterHash} {
+      // Only the submitter can read/write their own submissions.
+      // The target hashes are stored (hashed), so other users cannot enumerate
+      // who was submitted.
+      allow read: if isOwner(submitterHash);
+      allow create: if isOwner(submitterHash)
+        && request.resource.data.keys().hasAll(['targetHashes', 'submittedAt'])
+        && request.resource.data.targetHashes is list
+        && request.resource.data.targetHashes.size() <= 10; // max limit
+      allow update: if isOwner(submitterHash)
+        && request.resource.data.keys().hasAll(['targetHashes', 'submittedAt'])
+        && request.resource.data.targetHashes is list
+        && request.resource.data.targetHashes.size() <= 10;
+      allow delete: if false; // Never allow client-side deletion of submissions
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // matches/{dateKey}/match_records/{matchId}
+    // ─────────────────────────────────────────────────────────────────────
+
+    match /matches/{dateKey}/match_records/{matchId} {
+      // Users can only read matches they are a participant in.
+      // Only Cloud Functions (admin SDK) can write matches.
+      allow read: if isAuthenticated()
+        && (resource.data.user1Hash == callerPhoneHash()
+            || resource.data.user2Hash == callerPhoneHash());
+      allow write: if false; // Only Cloud Functions write matches
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // purchases/{purchaseId}
+    // ─────────────────────────────────────────────────────────────────────
+
+    match /purchases/{purchaseId} {
+      // Only the owner can read their own purchase records.
+      // Writes are handled by Cloud Functions (server-side verification).
+      allow read: if isAuthenticated()
+        && resource.data.userHash == callerPhoneHash();
+      allow write: if false; // Only Cloud Functions write purchases
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Default deny
+    // ─────────────────────────────────────────────────────────────────────
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
