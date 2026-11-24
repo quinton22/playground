@@ -1,0 +1,6 @@
+{
+  "name": "automate-your-day",
+  "version": "0.1.0",
+  "description": "Set up and run config-driven daily work automation (ayd): tasks with hard limits, a compact daily journal, and long-running tracks.",
+  "skills": "./skills"
+}
