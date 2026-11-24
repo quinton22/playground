@@ -27,6 +27,8 @@ jobs:
           channel: stable
           cache: true
       - run: flutter create --platforms=android,ios --project-name fore_last_stand --org com.playground .
+      # flutter create adds a template counter-app test that doesn't apply to this game
+      - run: rm -f test/widget_test.dart
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test

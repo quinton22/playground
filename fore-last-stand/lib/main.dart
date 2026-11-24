@@ -1,6 +1,6 @@
 import 'package:flame/game.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import 'game/fore_game.dart';
 
@@ -15,10 +15,9 @@ class ForeApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Fore! Last Stand',
-      debugShowCheckedModeBanner: false,
-      home: Scaffold(body: GameWidget(game: ForeGame())),
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: GameWidget(game: ForeGame()),
     );
   }
 }
