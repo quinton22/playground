@@ -34,21 +34,23 @@ def compact(cfg: Config, today: date, keep_days: int = 60, keep_entries: int = 3
                 f.writelines(f"{d.isoformat()}|{l}\n" for l in lines)
             p.unlink()
 
-    for t in tracks.all_tracks(cfg):
-        if len(t.entries) <= keep_entries:
-            continue
-        old, keep = t.entries[:-keep_entries], t.entries[-keep_entries:]
-        res["track_entries"] += len(old)
-        if dry_run:
-            continue
-        a = track_archive_path(cfg, t.slug)
-        a.parent.mkdir(parents=True, exist_ok=True)
-        new = not a.exists()
-        with a.open("a", encoding="utf-8") as f:
-            if new:
-                f.write("#ayd1 track archive\n")
-            f.writelines(e + "\n" for e in old)
-        tracks.save(cfg, t.slug, t.meta, keep)
+    for slug in [t.slug for t in tracks.all_tracks(cfg)]:
+        with tracks.locked(cfg, slug):
+            t = tracks.load(cfg, slug)  # reload under the lock: other tasks may have appended
+            if len(t.entries) <= keep_entries:
+                continue
+            old, keep = t.entries[:-keep_entries], t.entries[-keep_entries:]
+            res["track_entries"] += len(old)
+            if dry_run:
+                continue
+            a = track_archive_path(cfg, slug)
+            a.parent.mkdir(parents=True, exist_ok=True)
+            new = not a.exists()
+            with a.open("a", encoding="utf-8") as f:
+                if new:
+                    f.write("#ayd1 track archive\n")
+                f.writelines(e + "\n" for e in old)
+            tracks.save(cfg, slug, t.meta, keep)
 
     for led in (ledger.questions(cfg), ledger.actions(cfg)):
         if dry_run:

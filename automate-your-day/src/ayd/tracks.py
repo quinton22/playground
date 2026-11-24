@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import NAME_RE, Config
+from .fsutil import atomic_write, file_lock
 from .journal import KINDS, clean
 
 STATUSES = ("active", "paused", "done")
@@ -42,10 +43,13 @@ def path(cfg: Config, slug: str) -> Path:
 
 
 def save(cfg: Config, slug: str, meta: dict[str, str], entries: list[str]) -> None:
-    p = path(cfg, slug)
-    p.parent.mkdir(parents=True, exist_ok=True)
     lines = ["#ayd1 track"] + [f"@{k}={clean(v)}" for k, v in meta.items()] + entries
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write(path(cfg, slug), "\n".join(lines) + "\n")
+
+
+def locked(cfg: Config, slug: str):
+    """Hold for a whole read-modify-write (set_meta, append, compaction) so concurrent tasks never lose entries."""
+    return file_lock(cfg.tracks_dir / f".{path(cfg, slug).stem}.lock")
 
 
 def load(cfg: Config, slug: str) -> Track:
@@ -78,29 +82,32 @@ def _check_meta(key: str, value: str) -> None:
 
 def create(cfg: Config, slug: str, title: str, due: str | None = None) -> Track:
     p = path(cfg, slug)
-    if p.exists():
-        raise TrackError(f"track already exists: {slug}")
     meta = {"title": title, "status": "active"}
     if due:
         _check_meta("due", due)
         meta["due"] = due
-    save(cfg, slug, meta, [])
+    with locked(cfg, slug):
+        if p.exists():
+            raise TrackError(f"track already exists: {slug}")
+        save(cfg, slug, meta, [])
     return load(cfg, slug)
 
 
 def set_meta(cfg: Config, slug: str, key: str, value: str) -> None:
-    t = load(cfg, slug)
     _check_meta(key, value)
-    t.meta[key] = value
-    save(cfg, slug, t.meta, t.entries)
+    with locked(cfg, slug):
+        t = load(cfg, slug)
+        t.meta[key] = value
+        save(cfg, slug, t.meta, t.entries)
 
 
-def append(cfg: Config, slug: str, kind: str, text: str, now: datetime) -> None:
+def append(cfg: Config, slug: str, kind: str, text: str, now: datetime, day: date | None = None) -> None:
     if kind not in KINDS:
         raise TrackError(f"kind must be one of {', '.join(KINDS)}")
-    load(cfg, slug)  # must exist
-    with path(cfg, slug).open("a", encoding="utf-8") as f:
-        f.write(f"{now.date().isoformat()}|{kind}|{clean(text)}\n")
+    with locked(cfg, slug):
+        load(cfg, slug)  # must exist
+        with path(cfg, slug).open("a", encoding="utf-8") as f:
+            f.write(f"{(day or now.date()).isoformat()}|{kind}|{clean(text)}\n")
 
 
 def all_tracks(cfg: Config) -> list[Track]:

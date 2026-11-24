@@ -67,7 +67,7 @@ covers = "this-week"             # this-week | last-week | this-month | last-mon
 
 Task keys: `do` (required), `via`, `limits`, `repos`, `when`, `agent`, `approval`, `requires`, `timeout`. `[ayd]` also takes `timeout` and `nudge_days` (flag track deadlines this close, default 7). Unknown keys are errors, so typos are caught.
 
-`when` is `manual` (never scheduled) or one of `every 30m`, `every 2h`, `daily 09:00`, `weekdays 17:30`, `mon,wed,fri 08:00`.
+`when` is `manual` (never scheduled) or one of `every 30m`, `every 2h`, `daily 09:00`, `weekdays 17:30`, `mon,wed,fri 08:00`. Cron restarts each hour/day, so `every N` must divide evenly (minutes: 1,2,3,4,5,6,10,12,15,20,30; hours: 1,2,3,4,6,8,12); anything else is rejected rather than run unevenly.
 
 ## Commands
 
@@ -77,6 +77,7 @@ Task keys: `do` (required), `via`, `limits`, `repos`, `when`, `agent`, `approval
 | `ayd check` | validate config; show schedule; warn on tasks without limits and near/overdue deadlines |
 | `ayd brief [task\|wrapup]` | print the briefing (rules, task, limits, previous journal, questions, approvals, deadlines, tracks) |
 | `ayd run <task> [--dry-run] [--force]` | pipe the briefing to the agent. Skips if `requires` unmet or already running; failures/timeouts are journaled |
+| `ayd start <task\|wrapup>` / `ayd finish <task> [--failed]` | interactive agents: same `requires` check, overlap guard and run recording as `ayd run` (`start` exits 3 = do not proceed) |
 | `ayd wrapup [--dry-run]` | prompt you for extra work (if `ask_user`), then the agent scans configured sources and sets next steps |
 | `ayd digest [--notify]` | no-AI summary: done / next / blockers / deadlines / failures (also a standup) |
 | `ayd add "text" [--win] [--date D]` | record work you did yourself (`--win` = notable accomplishment) |
@@ -133,8 +134,9 @@ N|09:40|tickets|#billing ENG-12: add retry test
 
 ## Reliability
 
-- **Overlap guard.** Each task takes a lock file (`<data_dir>/locks/`), so a slow `every 30m` task never runs twice at once. Dead or stale locks are replaced; the skipped run is recorded.
-- **Timeout.** Runs are killed at `timeout` (default `1h`) and journaled as failures.
+- **Overlap guard.** Each task holds an OS-level lock (`flock` on `<data_dir>/locks/<task>.lock`) for the life of its run, so a slow `every 30m` task never runs twice at once, and the lock vanishes if the process dies (no stale-lock cleanup, no startup race). Interactive sessions (`ayd start`/`finish`) take a time-limited marker that scheduled runs respect. Skips are recorded. On platforms without `fcntl` (Windows) locking is unavailable.
+- **Timeout.** The agent runs in its own process group; at `timeout` (default `1h`) the whole group is killed (including anything it spawned) before the lock is released, and the run is journaled as a failure.
+- **Shared files.** Questions/approvals and tracks are updated under per-file locks with atomic replacement, so tasks running at once do not lose each other's entries. Ids (`q3`, `a5`) are never reused, even after `compact` purges old ones.
 - **Dependencies.** `requires = [...]`: `name` (or `ran:name`) = ran successfully today, `no-questions:name`, `no-pending:name`. Unmet = skipped and recorded; `--force` overrides. Order scheduled tasks so prerequisites run first.
 - **Stats.** `<data_dir>/runs.ayd` logs each run (`date|time|task|status|secs|rc|~tok in|~tok out|note`). Tokens are chars/4 estimates of the prompt and captured output, not billing numbers.
 - **Deadlines.** Tracks with `due` within `nudge_days` (or overdue) show up in briefings, `ayd check`, and the digest.
@@ -144,7 +146,7 @@ N|09:40|tickets|#billing ENG-12: add retry test
 
 Everything the agent logs is evidence. `W` lines (notable accomplishments: shipped, a metric moved, unblocked others) are the strongest; agents are told to log them, and you can add your own: `ayd add "cut checkout p95 by 30%" --win`.
 
-1. **Rollups (optional, recommended).** `ayd rollup run` (or `[rollup]` on a schedule) has the agent condense a week or month into 5-15 lines under `<data_dir>/rollups/2026-W47.ayd`. Report evidence uses a rollup instead of the raw days it covers (month rollups beat week rollups), so a full-year report stays small.
+1. **Rollups (optional, recommended).** `ayd rollup run` (or `[rollup]` on a schedule) has the agent condense a week or month into 5-15 lines under `<data_dir>/rollups/2026-W47.ayd`. Each agent-written rollup records how many journal lines it was built from. Report evidence substitutes it for the raw days only while that count still matches; if you logged more afterwards, or the rollup was hand-written (`ayd rollup add`), the raw days are included too, so nothing is hidden. Fresh month rollups beat week rollups, so a full-year report stays small.
 2. **Reports.** `ayd report <kind> [--period P] ...` builds a prompt with the evidence and runs your agent; the document is saved to `<data_dir>/reports/`.
 
 ```bash

@@ -30,11 +30,13 @@ def parse_when(value: str) -> str | None:
     m = re.fullmatch(r"every (\d+)([mh])", s)
     if m:
         n, unit = int(m.group(1)), m.group(2)
-        if unit == "m" and 1 <= n <= 59:
+        if unit == "m" and 1 <= n <= 30 and 60 % n == 0:
             return f"*/{n} * * * *"
-        if unit == "h" and 1 <= n <= 23:
+        if unit == "h" and 1 <= n <= 12 and 24 % n == 0:
             return f"0 */{n} * * *"
-        raise ValueError(f"bad interval {value!r} (1-59 minutes or 1-23 hours)")
+        raise ValueError(
+            f"bad interval {value!r}: cron restarts each hour/day, so it must divide evenly "
+            "(minutes: 1,2,3,4,5,6,10,12,15,20,30; hours: 1,2,3,4,6,8,12)")
     m = re.fullmatch(r"(daily|weekdays|[a-z]{3}(?:,[a-z]{3})*) (\d{1,2}):(\d{2})", s)
     if m:
         days, hh, mm = m.group(1), int(m.group(2)), int(m.group(3))

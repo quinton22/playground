@@ -103,15 +103,40 @@ def cmd_run(args) -> int:
     return runner.run_agent(cfg, task.name, task.agent or cfg.agent, prompt, now, task.timeout).exit_code
 
 
+def cmd_start(args) -> int:
+    """Interactive entry point: same prerequisite check, overlap guard and run recording as `ayd run`."""
+    cfg, now, key = _cfg(args), _now(), args.task
+    if key == "wrapup":
+        if cfg.wrapup is None:
+            raise ConfigError("no [wrapup] section in config")
+    elif key not in cfg.tasks:
+        raise ConfigError(f"unknown task {key!r} (have: {', '.join(cfg.tasks) or 'none'})")
+    reason = None
+    if key in cfg.tasks and not args.force:
+        reason = runner.unmet(cfg, cfg.tasks[key], now)
+    reason = reason or runner.session_start(cfg, key)
+    if reason:
+        runner.record(cfg, now, key, "skipped", note=reason)
+        print(f"ayd: do not start {key}: {reason}", file=sys.stderr)
+        return 3
+    print(brief.build(cfg, key, now), end="")
+    return 0
+
+
+def cmd_finish(args) -> int:
+    cfg = _cfg(args)
+    runner.session_finish(cfg, args.task, _now(), ok=not args.failed, note=args.note or "")
+    return 0
+
+
 def cmd_wrapup(args) -> int:
     cfg = _cfg(args)
     if cfg.wrapup is None:
         raise ConfigError("no [wrapup] section in config")
     w, now = cfg.wrapup, _now()
     day = brief.wrapup_day(cfg, now)
-    prompt = brief.build(cfg, "wrapup", now)
     if args.dry_run:
-        print(prompt, end="")
+        print(brief.build(cfg, "wrapup", now), end="")
         return 0
     if w.ask_user:
         if sys.stdin.isatty():
@@ -123,6 +148,7 @@ def cmd_wrapup(args) -> int:
             _notify(w.notify, f"ayd: add extra work for {day} with: ayd add \"what you did\" --date {day}")
     if getattr(args, "no_agent", False):
         return 0
+    prompt = brief.build(cfg, "wrapup", now)  # built after the entries above so the agent sees them
     return runner.run_agent(cfg, "wrapup", cfg.agent, prompt, now).exit_code
 
 
@@ -160,9 +186,10 @@ def cmd_log(args) -> int:
         qid = ledger.questions(cfg).add(args.task, text, now)
         text = f"{qid} {text}"
         print(qid)
+    day = _parse_day(args.date)
     if args.track:
-        tracks.append(cfg, args.track, args.kind, text, now)
-    journal.append(cfg, args.kind, args.task, (f"#{args.track} " if args.track else "") + text, now, _parse_day(args.date))
+        tracks.append(cfg, args.track, args.kind, text, now, day)
+    journal.append(cfg, args.kind, args.task, (f"#{args.track} " if args.track else "") + text, now, day)
     return 0
 
 
@@ -265,7 +292,7 @@ def cmd_compact(args) -> int:
 def cmd_rollup(args) -> int:
     cfg, now = _cfg(args), _now()
     if args.action == "add":
-        history.rollup_add(cfg, args.period, args.kind, args.text)
+        history.rollup_add(cfg, periods.parse(args.period, now.date()).label, args.kind, args.text)
         return 0
     if args.action == "show":
         print("\n".join(history.rollup_read(cfg, periods.parse(args.period, now.date()).label)))
@@ -276,6 +303,7 @@ def cmd_rollup(args) -> int:
     if args.dry_run:
         print(prompt, end="")
         return 0
+    src = history.count_lines(cfg, period)  # fingerprint: the rollup is only trusted while this is still true
     res = runner.run_agent(cfg, "rollup", cfg.agent, prompt, now)
     if res.status != "ok":
         return res.exit_code
@@ -283,7 +311,7 @@ def cmd_rollup(args) -> int:
     if not lines:
         print("ayd: agent output had no `H|`/`M|`/`C|` lines; rollup not saved", file=sys.stderr)
         return 1
-    p = history.rollup_write(cfg, period.label, lines)
+    p = history.rollup_write(cfg, period.label, lines, src=src)
     print(f"\nsaved {len(lines)} lines to {p}", file=sys.stderr)
     return 0
 
@@ -312,13 +340,29 @@ def cmd_report(args) -> int:
     if not res.out.strip():
         print("ayd: agent produced no output", file=sys.stderr)
         return 1
-    out = Path(args.out).expanduser() if args.out else cfg.reports_dir / f"{args.kind}-{period.label.replace('..', '_')}.md"
-    if out.exists() and not args.out:
-        out = out.with_name(f"{out.stem}-{now:%H%M%S}.md")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(res.out, encoding="utf-8")
+    if args.out:
+        out = Path(args.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(res.out, encoding="utf-8")
+    else:
+        out = _write_new(cfg.reports_dir / f"{args.kind}-{period.label.replace('..', '_')}.md", res.out)
     print(f"\nsaved to {out}", file=sys.stderr)
     return 0
+
+
+def _write_new(base: Path, text: str) -> Path:
+    """Create base (or base-2, base-3, ...) exclusively so concurrent/repeated runs never overwrite a report."""
+    base.parent.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 10_000):
+        p = base if n == 1 else base.with_name(f"{base.stem}-{n}{base.suffix}")
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        return p
+    raise OSError(f"could not allocate a report file near {base}")
 
 
 def cmd_template(args) -> int:
@@ -348,7 +392,7 @@ def cmd_schedule(args) -> int:
     if cfg.wrapup and cfg.wrapup.cron:
         entries.append((cfg.wrapup.cron, "wrapup"))
     if cfg.digest and cfg.digest.cron:
-        entries.append((cfg.digest.cron, "digest --notify"))
+        entries.append((cfg.digest.cron, "digest --notify" if cfg.digest.notify else "digest"))
     if cfg.rollup and cfg.rollup.cron:
         entries.append((cfg.rollup.cron, "rollup run"))
     block = schedule.crontab_block(entries, str(cfg.path), args.bin)
@@ -385,6 +429,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="print the prompt instead of running the agent")
     s.add_argument("--force", action="store_true", help="ignore the task's `requires`")
     s.set_defaults(fn=cmd_run)
+
+    s = sub.add_parser("start", help="(interactive agents) check requirements, take the run slot, print the briefing")
+    s.add_argument("task", help="task name or 'wrapup'")
+    s.add_argument("--force", action="store_true", help="ignore the task's `requires`")
+    s.set_defaults(fn=cmd_start)
+    s = sub.add_parser("finish", help="(interactive agents) record the run as done and release the slot")
+    s.add_argument("task")
+    s.add_argument("--failed", action="store_true")
+    s.add_argument("--note")
+    s.set_defaults(fn=cmd_finish)
 
     s = sub.add_parser("wrapup", help="end-of-day/start-of-day scan, user prompt, and next steps")
     s.add_argument("--dry-run", action="store_true")

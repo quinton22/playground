@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import tracks
 from .config import Config
+from .fsutil import atomic_write
 from .journal import clean
 from .periods import Period, containing
 
@@ -70,25 +71,44 @@ def rollup_read(cfg: Config, label: str) -> list[str]:
     return [l for l in p.read_text(encoding="utf-8").splitlines() if l and not l.startswith("#")]
 
 
-def rollup_write(cfg: Config, label: str, lines: list[str]) -> Path:
+def rollup_src(cfg: Config, label: str) -> int | None:
+    """Number of source journal lines the rollup was built from (None if hand-written)."""
     p = rollup_path(cfg, label)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f"#ayd1 rollup {label}\n" + "".join(l + "\n" for l in lines), encoding="utf-8")
+    if p.exists():
+        head = p.read_text(encoding="utf-8").splitlines()[:1]
+        if head and " src=" in head[0]:
+            try:
+                return int(head[0].rsplit(" src=", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+def count_lines(cfg: Config, period: Period) -> int:
+    return sum(len(v) for v in days(cfg, period.start, period.end).values())
+
+
+def rollup_write(cfg: Config, label: str, lines: list[str], src: int | None = None) -> Path:
+    p = rollup_path(cfg, label)
+    head = f"#ayd1 rollup {label}" + (f" src={src}" if src is not None else "")
+    atomic_write(p, head + "\n" + "".join(l + "\n" for l in lines))
     return p
 
 
 def rollup_add(cfg: Config, label: str, kind: str, text: str) -> None:
     if kind not in ROLLUP_KINDS:
         raise ValueError(f"rollup kind must be one of {', '.join(ROLLUP_KINDS)}")
-    rollup_write(cfg, label, rollup_read(cfg, label) + [f"{kind}|{clean(text)}"])
+    rollup_write(cfg, label, rollup_read(cfg, label) + [f"{kind}|{clean(text)}"], rollup_src(cfg, label))
 
 
 def pack(cfg: Config, period: Period, exclude: str | None = None) -> tuple[str, dict]:
     """Evidence for `period`: existing rollups where they fully cover a month/week, raw days elsewhere, plus tracks."""
     covered: set[date] = set()
     segs: list[tuple[date, str]] = []  # (start, text)
+    used = 0
 
     def try_unit(unit: str) -> None:
+        nonlocal used
         cur = period.start
         while cur <= period.end:
             sub = containing(unit, cur)
@@ -96,14 +116,19 @@ def pack(cfg: Config, period: Period, exclude: str | None = None) -> tuple[str, 
             if sub.start >= period.start and sub.end <= period.end and sub.label != exclude \
                     and not any(d in covered for d in sub.days()):
                 lines = rollup_read(cfg, sub.label)
-                if lines:
+                if lines and rollup_src(cfg, sub.label) == count_lines(cfg, sub):
+                    # fresh: nothing was logged for these days since it was built, so it replaces them
                     segs.append((sub.start, f"## rollup {sub.label}\n" + "\n".join(lines)))
                     covered.update(sub.days())
+                    used += 1
+                elif lines:
+                    # hand-written or out of date: keep it as a summary but do not hide the raw days
+                    segs.append((sub.start, f"## rollup {sub.label} (not verified current; raw days follow)\n" + "\n".join(lines)))
             cur = nxt
 
     try_unit("month")
     try_unit("week")
-    n_roll = len(segs)
+    n_roll = used
     raw = days(cfg, period.start, period.end)
     n_days = 0
     for d in sorted(raw):

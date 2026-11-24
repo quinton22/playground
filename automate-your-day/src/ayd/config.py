@@ -185,6 +185,9 @@ def load(path: Path) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: invalid TOML: {e}") from None
     _check_keys("top level", raw, {"ayd", "tasks", "wrapup", "digest", "rollup"})
+    for section in ("ayd", "tasks", "wrapup", "digest", "rollup"):
+        if section in raw and not isinstance(raw[section], dict):
+            raise ConfigError(f"[{section}] must be a table")
 
     ayd = raw.get("ayd", {})
     _check_keys("ayd", ayd, {"data_dir", "agent", "timeout", "nudge_days"})

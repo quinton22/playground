@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from . import journal, ledger
 from .config import REQ_RE, Config, Task
+from .fsutil import file_lock
 
 HEAD = "#ayd1 runs: date|HH:MM|task|status|secs|rc|tok_in~|tok_out~|note  (tokens are chars/4 estimates)\n"
 
@@ -88,41 +90,94 @@ def unmet(cfg: Config, task: Task, now: datetime) -> str | None:
     return None
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 
-def acquire(cfg: Config, key: str, stale_after: float) -> Path | None:
-    p = cfg.data_dir / "locks" / f"{key}.lock"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
+def _lock_dir(cfg: Config) -> Path:
+    return cfg.data_dir / "locks"
+
+
+def acquire(cfg: Config, key: str):
+    """Hold an OS-level lock for `key` for as long as the returned file is open (None if someone else holds it).
+    The OS drops it if the process dies, so there is no stale-lock reclaiming and no initialization race."""
+    d = _lock_dir(cfg)
+    d.mkdir(parents=True, exist_ok=True)
+    f = open(d / f"{key}.lock", "a+")
+    if fcntl:
         try:
-            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            try:
-                pid_s, t_s = p.read_text().split()
-                live = _pid_alive(int(pid_s)) and time.time() - float(t_s) < stale_after
-            except (ValueError, OSError):
-                live = False
-            if live:
-                return None
-            p.unlink(missing_ok=True)
-            continue
-        with os.fdopen(fd, "w") as f:
-            f.write(f"{os.getpid()} {time.time()}")
-        return p
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            return None
+    f.seek(0)
+    f.truncate()
+    f.write(f"{os.getpid()} {time.time()}")
+    f.flush()
+    return f
+
+
+def release(f) -> None:
+    try:
+        if fcntl:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    finally:
+        f.close()
+
+
+def _session_path(cfg: Config, key: str) -> Path:
+    return _lock_dir(cfg) / f"{key}.session"
+
+
+def _session_fresh(cfg: Config, key: str) -> float | None:
+    """Start time of a live interactive session for `key` (they time out after cfg.timeout), else None."""
+    p = _session_path(cfg, key)
+    try:
+        t = float(p.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    return t if time.time() - t < cfg.timeout else None
+
+
+def session_start(cfg: Config, key: str) -> str | None:
+    """Interactive counterpart of run_agent's lock (an interactive agent is not a process we can hold a lock for).
+    Returns a reason string if the task is busy, else records the session start and returns None."""
+    _lock_dir(cfg).mkdir(parents=True, exist_ok=True)
+    with file_lock(_lock_dir(cfg) / f"{key}.session.lock"):
+        held = acquire(cfg, key)
+        if held is None:
+            return "already running"
+        release(held)
+        if _session_fresh(cfg, key):
+            return "an interactive session is already in progress (finish it with `ayd finish`)"
+        _session_path(cfg, key).write_text(str(time.time()))
     return None
+
+
+def session_finish(cfg: Config, key: str, now: datetime, ok: bool = True, note: str = "") -> None:
+    started = _session_fresh(cfg, key)
+    _session_path(cfg, key).unlink(missing_ok=True)
+    secs = max(0.0, time.time() - started) if started else 0.0
+    record(cfg, now, key, "ok" if ok else "failed", secs, 0 if ok else 1, note=note or "interactive")
+    if not ok:
+        journal.append(cfg, "A", key, f"FAILED (interactive){': ' + note if note else ''}; retry next run", now)
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, AttributeError):
+        proc.kill()
 
 
 def run_agent(cfg: Config, key: str, agent: str, prompt: str, now: datetime, timeout: int | None = None) -> Result:
     timeout = timeout or cfg.timeout
-    lock = acquire(cfg, key, stale_after=timeout * 2)
+    lock = acquire(cfg, key)
+    if lock is not None and _session_fresh(cfg, key):
+        release(lock)
+        lock = None
     if lock is None:
         record(cfg, now, key, "skipped", note="already running")
         print(f"ayd: {key} is already running; skipped", file=sys.stderr)
@@ -130,19 +185,30 @@ def run_agent(cfg: Config, key: str, agent: str, prompt: str, now: datetime, tim
     env = {**os.environ, "AYD_CONFIG": str(cfg.path)}
     t0, status, rc, out = time.monotonic(), "ok", 0, ""
     try:
-        p = subprocess.run(shlex.split(agent), input=prompt, text=True, env=env, stdout=subprocess.PIPE, timeout=timeout)
-        rc, out = p.returncode, p.stdout or ""
-        if rc:
-            status = "failed"
-    except subprocess.TimeoutExpired as e:
-        status, rc = "timeout", 124
-        o = e.stdout or ""
-        out = o.decode(errors="replace") if isinstance(o, bytes) else o
+        # own session/process group so a timeout can kill everything the agent spawned
+        proc = subprocess.Popen(shlex.split(agent), stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                                env=env, start_new_session=True)
+        try:
+            out, _ = proc.communicate(prompt, timeout=timeout)
+            rc = proc.returncode
+            if rc:
+                status = "failed"
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            out, _ = proc.communicate()  # reaps the agent
+            status, rc = "timeout", 124
+        except BaseException:
+            _kill_group(proc)
+            proc.wait()
+            raise
+        finally:
+            _kill_group(proc)  # also reaps anything the agent left running before the lock is released
     except FileNotFoundError:
         print(f"ayd: agent command not found: {agent}", file=sys.stderr)
         status, rc = "failed", 127
     finally:
-        lock.unlink(missing_ok=True)
+        release(lock)
+    out = out or ""
     if out:
         sys.stdout.write(out)
         sys.stdout.flush()

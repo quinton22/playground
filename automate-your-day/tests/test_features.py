@@ -155,32 +155,83 @@ def test_force_ignores_requires(tmp_path):
 def test_overlap_lock_skips(tmp_path):
     p = write_cfg(tmp_path, agent="true")
     cfg = load(p)
-    lock = runner.acquire(cfg, "email", 60)
-    assert lock and runner.acquire(cfg, "email", 60) is None
+    lock = runner.acquire(cfg, "email")
+    assert lock and runner.acquire(cfg, "email") is None
     assert main(["-c", str(p), "run", "email"]) == 0
     assert runner.read_runs(cfg)[-1].status == "skipped"
-    lock.unlink()
-    assert runner.acquire(cfg, "email", 60)
+    runner.release(lock)
+    again = runner.acquire(cfg, "email")  # lock file persists; ownership is the OS lock, so no stale reclaim races
+    assert again
+    runner.release(again)
 
 
-def test_stale_lock_is_replaced(tmp_path):
+def test_lock_released_when_holder_dies(tmp_path):
+    import subprocess, sys
     cfg = load(write_cfg(tmp_path))
-    lock = cfg.data_dir / "locks" / "email.lock"
-    lock.parent.mkdir(parents=True)
-    lock.write_text(f"{os.getpid()} {time.time() - 10_000}")  # alive pid but too old
-    assert runner.acquire(cfg, "email", 60)
-    lock.write_text("999999999 " + str(time.time()))  # dead pid
-    assert runner.acquire(cfg, "email", 60)
+    code = ("import sys,time;from ayd import runner;from ayd.config import load;from pathlib import Path;"
+            f"c=load(Path({str(tmp_path / 'ayd.toml')!r}));f=runner.acquire(c,'email');print('held',flush=True);time.sleep(60)")
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "held"
+        assert runner.acquire(cfg, "email") is None
+    finally:
+        proc.kill()
+        proc.wait()
+    got = runner.acquire(cfg, "email")
+    assert got
+    runner.release(got)
+
+
+def test_interactive_session_lifecycle(tmp_path, capsys):
+    p = write_cfg(tmp_path, agent="true")
+    c = ["-c", str(p)]
+    assert main(c + ["start", "tickets"]) == 3          # requires email first
+    assert "do not start tickets" in capsys.readouterr().err
+    assert main(c + ["start", "email"]) == 0
+    assert "TASK email" in capsys.readouterr().out
+    assert main(c + ["start", "email"]) == 3             # already in progress
+    assert main(c + ["run", "email"]) == 0               # scheduled run yields to the session
+    assert runner.read_runs(load(p))[-1].status == "skipped"
+    assert main(c + ["finish", "email"]) == 0
+    assert runner.read_runs(load(p))[-1].status == "ok"  # now satisfies requires
+    assert main(c + ["start", "tickets"]) == 0
+    assert main(c + ["finish", "tickets", "--failed", "--note", "boom"]) == 0
+    assert runner.read_runs(load(p))[-1].status == "failed"
+    assert "FAILED (interactive)" in journal.read_day(load(p), datetime.now().date())
+    assert main(c + ["start", "nope"]) == 1
+    assert main(c + ["start", "wrapup"]) == 1            # no [wrapup] in this config
 
 
 def test_timeout_kills_and_logs(tmp_path):
-    p = write_cfg(tmp_path, agent="sleep 30")
-    cfg = load(p)
+    cfg = load(write_cfg(tmp_path, agent="sleep 30"))
     res = runner.run_agent(cfg, "email", "sleep 30", "x", NOW, timeout=1)
     assert res.status == "timeout" and res.exit_code == 124
     assert runner.read_runs(cfg)[-1].status == "timeout"
     assert "FAILED (timeout" in journal.read_day(cfg, NOW.date())
-    assert not (cfg.data_dir / "locks" / "email.lock").exists()
+    got = runner.acquire(cfg, "email")
+    assert got
+    runner.release(got)
+
+
+def test_timeout_kills_spawned_children(tmp_path):
+    import os, subprocess
+    marker = tmp_path / "child.pid"
+    script = tmp_path / "agent.sh"
+    script.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > {marker}\nwait\n")
+    script.chmod(0o755)
+    cfg = load(write_cfg(tmp_path, agent=str(script)))
+    res = runner.run_agent(cfg, "email", str(script), "x", NOW, timeout=1)
+    assert res.status == "timeout"
+    pid = int(marker.read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+            time.sleep(0.1)
+        except ProcessLookupError:
+            break
+    else:
+        os.kill(pid, 9)
+        pytest.fail("grandchild survived the timeout")
 
 
 def test_stats(tmp_path, capsys):
@@ -254,11 +305,15 @@ def test_closed_ledger_items_purged(cfg):
 
 
 # ---- rollups and reports
-def test_pack_prefers_rollups(cfg):
+def _fresh_rollup(cfg, label, lines, today=NOW.date()):
+    history.rollup_write(cfg, label, lines, src=history.count_lines(cfg, periods.parse(label, today)))
+
+
+def test_pack_prefers_fresh_rollups(cfg):
     for d in range(16, 23):  # week 47
         journal.append(cfg, "A", "t", f"raw {d}", datetime(2026, 11, d, 9, 0))
     journal.append(cfg, "A", "t", "raw 24", datetime(2026, 11, 24, 9, 0))
-    history.rollup_add(cfg, "2026-W47", "H", "shipped billing v2 [2026-11-18]")
+    _fresh_rollup(cfg, "2026-W47", ["H|shipped billing v2 [2026-11-18]"])
     pk, info = history.pack(cfg, periods.parse("2026-11", NOW.date()))
     assert "shipped billing v2" in pk and "raw 24" in pk and "raw 17" not in pk
     assert info["rollups"] == 1 and info["days"] == 1
@@ -268,11 +323,27 @@ def test_pack_prefers_rollups(cfg):
         history.rollup_add(cfg, "2026-W47", "Z", "x")
 
 
+def test_stale_or_handwritten_rollup_does_not_hide_raw_entries(cfg):
+    journal.append(cfg, "A", "t", "early", datetime(2026, 11, 16, 9, 0))
+    _fresh_rollup(cfg, "2026-W47", ["H|summary"])
+    journal.append(cfg, "W", "t", "late friday win", datetime(2026, 11, 20, 18, 0))  # logged after the rollup
+    pk, info = history.pack(cfg, periods.parse("2026-W47", NOW.date()))
+    assert "summary" in pk and "late friday win" in pk and "early" in pk and info["rollups"] == 0
+    history.rollup_add(cfg, "2026-W46", "H", "hand written only")  # no src => never replaces raw days
+    journal.append(cfg, "A", "t", "w46 raw", datetime(2026, 11, 10, 9, 0))
+    pk, _ = history.pack(cfg, periods.parse("2026-11", NOW.date()))
+    assert "hand written only" in pk and "w46 raw" in pk
+    assert history.rollup_src(cfg, "2026-W46") is None
+    history.rollup_add(cfg, "2026-W47", "C", "extra")  # appending keeps the original fingerprint
+    assert history.rollup_src(cfg, "2026-W47") == 1
+
+
 def test_month_rollup_beats_week_rollups(cfg):
-    history.rollup_add(cfg, "2026-10", "H", "october summary")
-    history.rollup_add(cfg, "2026-W44", "H", "week 44 detail")  # inside October
+    journal.append(cfg, "A", "t", "oct raw", datetime(2026, 10, 14, 9, 0))
+    _fresh_rollup(cfg, "2026-10", ["H|october summary"])
+    _fresh_rollup(cfg, "2026-W42", ["H|week 42 detail"])  # inside October
     pk, info = history.pack(cfg, periods.parse("2026-Q4", NOW.date()))
-    assert "october summary" in pk and "week 44 detail" not in pk
+    assert "october summary" in pk and "week 42 detail" not in pk and "oct raw" not in pk
 
 
 def test_parse_rollup_output():
@@ -287,8 +358,13 @@ def test_rollup_run_saves_agent_lines(tmp_path):
     p = write_cfg(tmp_path, agent=f"cat {out}")
     assert main(["-c", str(p), "rollup", "run", "--period", "2026-W47"]) == 0
     assert history.rollup_read(load(p), "2026-W47") == ["H|did a thing [2026-11-17]", "M|3 PRs"]
-    assert main(["-c", str(p), "rollup", "add", "2026-W48", "hand written", "-k", "C"]) == 0
-    assert main(["-c", str(p), "rollup", "show", "2026-W48"]) == 0
+    assert history.rollup_src(load(p), "2026-W47") == 0
+    assert main(["-c", str(p), "rollup", "add", "2026-W40", "hand written", "-k", "C"]) == 0
+    assert main(["-c", str(p), "rollup", "show", "2026-W40"]) == 0
+    assert main(["-c", str(p), "rollup", "add", "this-week", "alias"]) == 0   # canonicalized to a real label
+    assert history.rollup_read(load(p), periods.parse("this-week", datetime.now().date()).label) == ["H|alias"]
+    assert main(["-c", str(p), "rollup", "add", "../../evil", "x"]) == 1
+    assert not (tmp_path / "evil.ayd").exists()
 
 
 def test_rollup_run_without_lines_fails(tmp_path):
@@ -355,3 +431,128 @@ def test_templates(tmp_path, capsys):
     assert main(["-c", str(p), "template", "add", "nope"]) == 1
     for n in templates.names():
         assert templates.render(n).startswith("[tasks.")
+
+
+# ---- review-fix regressions
+def test_ledger_ids_never_reused_after_purge(cfg):
+    led = ledger.actions(cfg)
+    a1 = led.add("send", "first", datetime(2026, 1, 1, 9, 0))
+    led.set_status(a1, "X")
+    assert led.purge_closed(date(2026, 6, 1)) == 1 and led.all() == []
+    assert led.add("send", "second", NOW) == "a2"
+
+
+def test_ledger_concurrent_adds_get_unique_ids(tmp_path):
+    import multiprocessing as mp
+    cfg_path = write_cfg(tmp_path)
+    with mp.get_context("fork").Pool(6) as pool:
+        ids = pool.map(_add_question, [str(cfg_path)] * 24)
+    assert len(set(ids)) == 24
+    assert len(ledger.questions(load(cfg_path)).all()) == 24
+
+
+def _add_question(cfg_path):
+    from pathlib import Path
+    return ledger.questions(load(Path(cfg_path))).add("t", "q", NOW)
+
+
+def test_track_updates_do_not_lose_concurrent_appends(tmp_path):
+    import multiprocessing as mp
+    p = write_cfg(tmp_path)
+    tracks.create(load(p), "shared", "Shared")
+    with mp.get_context("fork").Pool(6) as pool:
+        pool.map(_track_work, [(str(p), i) for i in range(30)])
+    t = tracks.load(load(p), "shared")
+    assert len(t.entries) == 15  # none of the 15 appends was overwritten by a concurrent metadata update
+    assert t.meta["status"] in ("paused", "active")
+
+
+def _track_work(arg):
+    from pathlib import Path
+    path, i = arg
+    cfg = load(Path(path))
+    if i % 2:
+        tracks.set_meta(cfg, "shared", "status", "paused" if i % 4 == 1 else "active")
+    else:
+        tracks.append(cfg, "shared", "A", f"e{i}", NOW)
+
+
+def test_wrapup_and_overview_do_not_execute_task_approvals(cfg):
+    ledger.actions(cfg).add("send", "reply to Bob", NOW)
+    ledger.actions(cfg).set_status("a1", "A")
+    for task in ("wrapup", None):
+        text = brief.build(load(cfg.path) if False else _with_wrapup(cfg), task, NOW)
+        assert "APPROVED ACTIONS (execute" not in text and "reply to Bob" not in text
+        assert "1 approved" in text
+    assert "APPROVED ACTIONS (execute" in brief.build(cfg, "send", NOW)
+
+
+def _with_wrapup(cfg):
+    from ayd.config import Wrapup
+    cfg.wrapup = Wrapup(scan=["x"])
+    return cfg
+
+
+def test_overview_is_selection_only(cfg):
+    text = brief.build(cfg, None, NOW)
+    assert "overview for choosing only" in text and "ayd start <task>" in text
+    assert "Pick up from the context" not in text
+
+
+def test_track_log_uses_requested_date(tmp_path):
+    p = write_cfg(tmp_path)
+    c = ["-c", str(p)]
+    main(c + ["track", "new", "t1"])
+    assert main(c + ["log", "email", "did x", "--track", "t1", "--date", "2026-11-17"]) == 0
+    assert tracks.load(load(p), "t1").entries == ["2026-11-17|A|did x"]
+    assert "2026-11-17.ayd" in [f.name for f in (tmp_path / "data" / "journal").iterdir()]
+
+
+def test_wrapup_briefing_includes_fallback_question(tmp_path):
+    p = write_cfg(tmp_path, '[wrapup]\nask_user = true\nscan = ["x"]', agent="cat")
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert main(["-c", str(p), "wrapup"]) == 0
+    assert "user not asked (no terminal)" in buf.getvalue()
+
+
+def test_report_default_filename_never_overwrites(tmp_path):
+    p = write_cfg(tmp_path, agent="echo # doc")
+    for _ in range(3):
+        assert main(["-c", str(p), "report", "brag", "--period", "2026"]) == 0
+    names = sorted(f.name for f in (tmp_path / "data" / "reports").iterdir())
+    assert names == ["brag-2026-2.md", "brag-2026-3.md", "brag-2026.md"]
+
+
+def test_digest_without_notify_schedules_without_flag(tmp_path, capsys):
+    p = write_cfg(tmp_path, '[digest]\nwhen = "weekdays 08:45"')
+    assert main(["-c", str(p), "schedule"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip().splitlines()[-2].endswith(" digest") and "--notify" not in out
+    q = write_cfg(tmp_path / "n" if (tmp_path / "n").mkdir() is None else tmp_path,
+                  '[digest]\nwhen = "weekdays 08:45"\nnotify = "true"')
+    main(["-c", str(q), "schedule"])
+    assert "digest --notify" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("body", ['tasks = []', 'ayd = 1', 'wrapup = "x"', 'digest = []', 'rollup = 3'])
+def test_non_table_sections_are_config_errors(tmp_path, body, capsys):
+    p = tmp_path / "c.toml"
+    p.write_text(body)
+    with pytest.raises(ConfigError, match="must be a table"):
+        load(p)
+    assert main(["-c", str(p), "check"]) == 1
+    assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("when,ok", [("every 30m", True), ("every 15m", True), ("every 40m", False),
+                                     ("every 7m", False), ("every 2h", True), ("every 5h", False),
+                                     ("every 8h", True), ("every 24h", False)])
+def test_even_intervals_only(when, ok):
+    from ayd import schedule
+    if ok:
+        assert schedule.parse_when(when)
+    else:
+        with pytest.raises(ValueError, match="divide evenly"):
+            schedule.parse_when(when)

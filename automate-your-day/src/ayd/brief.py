@@ -61,13 +61,17 @@ def _ledger_sections(cfg: Config, task: str | None, today: date) -> list[str]:
         parts.append("ANSWERED QUESTIONS (act on these, then `ayd close <id>`)\n"
                      + "\n".join(f"{i.id} [{i.task}] {i.text} => {i.note}" for i in ansq))
     acts = ledger.actions(cfg)
-    scope = task if task and task != "wrapup" else None
-    for status, title in (("A", "APPROVED ACTIONS (execute exactly as written, then `ayd close <id>`)"),
-                          ("R", "REJECTED ACTIONS (do not do these; `ayd close <id>` after noting why)"),
-                          ("P", "PENDING ACTIONS (awaiting approval; do not re-propose)")):
-        items = acts.by_status(status, task=scope)
-        if items:
-            parts.append(title + "\n" + "\n".join(f"{i.id} [{i.task}] {i.text}" + (f" -- {i.note}" if i.note else "") for i in items))
+    if task in cfg.tasks:  # only a task's own briefing may execute its approved actions, under its own limits
+        for status, title in (("A", "APPROVED ACTIONS (execute exactly as written, then `ayd close <id>`)"),
+                              ("R", "REJECTED ACTIONS (do not do these; `ayd close <id>` after noting why)"),
+                              ("P", "PENDING ACTIONS (awaiting approval; do not re-propose)")):
+            items = acts.by_status(status, task=task)
+            if items:
+                parts.append(title + "\n" + "\n".join(f"{i.id} [{i.task}] {i.text}" + (f" -- {i.note}" if i.note else "") for i in items))
+    else:
+        counts = {s: len(acts.by_status(s)) for s in ("A", "P")}
+        if counts["A"] or counts["P"]:
+            parts.append(f"ACTIONS: {counts['A']} approved, {counts['P']} pending. Each is executed only by its own task's run (not here).")
     return parts
 
 
@@ -112,6 +116,8 @@ def build(cfg: Config, task: str | None, now: datetime) -> str:
         ctx = _context(cfg, now.date(), task)
     else:
         listing = "\n".join(f"- {t.name} [{t.when}]: {t.do}" for t in cfg.tasks.values()) or "- (none)"
-        body = "CONFIGURED TASKS\n" + listing + "\n\nPick up from the context below. Ask the user what to run if unclear."
+        body = ("CONFIGURED TASKS (overview for choosing only)\n" + listing +
+                "\n\nDo NOT do any task work from this overview: it omits each task's limits, approval mode, connectors and repos. "
+                "Ask the user which task to run (or pick the one they named), then run `ayd start <task>` and follow that briefing.")
         ctx = _context(cfg, now.date(), None)
     return "\n\n".join([head, LEGEND, RULES, body, ctx]) + "\n"
