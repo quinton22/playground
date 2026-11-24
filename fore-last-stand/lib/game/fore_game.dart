@@ -73,6 +73,7 @@ class ForeGame extends FlameGame {
     _drawTowers(canvas);
     _drawEnemies(canvas);
     _drawBalls(canvas);
+    _drawCooldown(canvas);
     _drawAim(canvas);
     _drawFx(canvas);
     canvas.restore();
@@ -311,6 +312,27 @@ class ForeGame extends FlameGame {
       }
       canvas.drawCircle(_o(b.pos), b.radius, white);
     }
+  }
+
+  /// Radial recharge indicator around the tee: a dim track plus an arc that
+  /// fills clockwise as the swing cooldown runs out. Hidden once ready.
+  void _drawCooldown(Canvas canvas) {
+    if (battle.phase != Phase.playing || battle.swingCooldown <= 0) return;
+    final max = battle.swingCooldownMax;
+    if (max <= 0) return;
+    final fill = (1 - battle.swingCooldown / max).clamp(0.0, 1.0);
+    const r = 16.0;
+    final rect = Rect.fromCircle(center: _o(teePosition), radius: r);
+    canvas.drawCircle(_o(teePosition), 9, Paint()..color = const Color(0x88000000));
+    canvas.drawCircle(_o(teePosition), r, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..color = const Color(0x44FFFFFF));
+    canvas.drawArc(rect, -math.pi / 2, fill * 2 * math.pi, false, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..color = Color.lerp(const Color(0xFFFF7043), const Color(0xFF76FF03), fill)!);
   }
 
   void _drawAim(Canvas canvas) {
