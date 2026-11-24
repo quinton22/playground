@@ -2,11 +2,40 @@
 
 One-thumb, portrait golf tower-defense. A virus has overrun the golf course with animals and you are the last person standing at the clubhouse. Swing real clubs at golf balls with your thumb while towers (placed only on the clubhouse grounds) back you up.
 
-**Stack:** Flutter + [Flame](https://flame-engine.org). iOS and Android, portrait only.
+**Stack:** Flutter (3.47+, uses `material_ui`) + [Flame](https://flame-engine.org). iOS and Android, portrait only.
 
 ## Status
 
-Swing-feel prototype only: drag back from the tee, release to swing; geese, gators and raccoons walk toward the clubhouse. Clubs and enemies are plain data in `lib/data/` so new content needs no code changes.
+Playable MVP of the [feature spec](https://claude.ai/code/artifact/f2b2c67e-0ef5-49d5-abc2-055c1d0f03cb) (section 12 scope). Shapes stand in for art and text for the commentator's voice.
+
+**In the build**
+
+- **Swing:** drag back anywhere, release on the timing ring's green zone for a Sweet Spot (+50% damage, +1 pierce, screen shake). Dotted preview of the first wall bounce, ~0.8 s cooldown, aim-assist slider.
+- **Depth:** ricochets off walls, enemies and your own towers (a tagged tower overcharges), combo ladder Bogey → Albatross (coin multiplier, Fore! meter), 3-second Fore! barrage.
+- **Clubs:** Driver (pierce 3), Iron (2 bounces), Wedge (lob + blast), Putter (ground roll, unlocked in the Bag). 3-club bag, tap to swap.
+- **Towers (6):** Range Ball Machine, Sprinkler, Tee-Tesla, Lawnmower Ripper, Cart Cannon, Caddie Sniper on a 4x4 plot grid (5x5/6x6 via Clubhouse). Build between holes, or live at double cost with 2 s slow-mo. Sell for 70%, free re-placement in the first 10 s. Sprinkler + Tee-Tesla pair bonus; 3 tower levels.
+- **Enemies (8) + boss:** Goose (honk stuns towers), Gator (surfaces from water), Raccoon (steals coins), Crow (flier, dives towers), Boar (charges, ignores slows), Squirrel Bomber, Skunk (gas disables towers), Coyote Pack (leader buffs pups), Goose King boss (summons flocks).
+- **Holes:** Suburban Muni, 9 holes with par times, breathers on 3 and 6, boss on 9. Clubhouse has 3 flags; a fallen flag repairs 30% and grows swarms.
+- **Modes:** Quick Round (5 holes, mini-boss), Full Round (9 holes), Sudden Death (endless, one flag), Daily Tournament (date seed + daily modifier, local best score).
+- **Run layer:** 20 Mulligan-card perks in 4 rarities and 3 sets (set bonus), 1 of 3 draft after every hole, one free reroll.
+- **Caddies (2):** Big Earl (Fore! +40%, Big Drive), Dottie (+20% vs bosses, Mark & Snipe). First caddie free after the first round.
+- **Meta (saved locally):** coins, Club Tokens, XP; club levels 1-20 with traits; Clubhouse upgrades (grid, starting coins, walls); bestiary; "three nearest unlocks" on results and home. Clubhouse unlocks after 2 rounds, Bag after 3.
+- **First-time experience:** first round is scripted with hints; hidden adaptive difficulty (about 10% fewer enemies after 2 losses in a row).
+- **Settings:** aim assist, Auto-Caddie (swings for you at 60% damage), left-handed layout, screen shake, Gore (Full Splat / Classic / Squeaky Clean).
+
+**Not built yet** (needs a backend, store setup or art): rewarded ads, IAP, Season Pass, Gems shop, leaderboards, Weekly Invitational, notifications, share clips, voiced commentary, Tour Ranks/prestige, other courses, mid-run save, real art and audio.
+
+## Code layout
+
+| Path | What |
+|---|---|
+| `lib/data/` | All content as plain data: clubs, enemies, towers, perks, caddies, courses/holes, modes, commentary |
+| `lib/sim/` | Pure-Dart simulation (`Battle`), wave scheduling, combo, swing math. No Flame imports, fully unit-tested |
+| `lib/game/fore_game.dart` | Flame game: runs the sim loop and draws it |
+| `lib/meta/` | Profile, persistence (`shared_preferences`), rewards and upgrade rules |
+| `lib/ui/` | Flutter screens: home, run HUD/draft/build sheet, results, Bag, Clubhouse, Caddies, Bestiary, Settings |
+
+New content is usually a data entry: add an enemy to `enemies.dart` and reference it from a hole in `courses.dart`.
 
 ## Design summary
 
