@@ -174,7 +174,7 @@ class Battle {
   bool get foreReady => foreMeter >= 100 && phase == Phase.playing;
   int get totalHoles => config.mode.holes ?? 0;
   int get gridSize => config.gridSize;
-  double get caddieMaxCooldown => (caddie?.cooldown ?? 0) * (1 - perkSum(PerkEffect.caddieCooldown));
+  double get caddieMaxCooldown => (caddie?.cooldown ?? 0) * perkProduct(PerkEffect.caddieCooldown);
   bool get caddieReady => caddie != null && caddieCooldown <= 0 && phase == Phase.playing;
   int get remainingSpawns => _queue.length;
   double get ringPhaseNow => ringPhase(dragTime);
@@ -186,6 +186,16 @@ class Battle {
       if (p.effect == effect) sum += p.value;
     }
     return sum;
+  }
+
+  /// Repeated reduction perks stack multiplicatively, so they never reach 100%.
+  double perkProduct(PerkEffect effect) {
+    var product = 1.0;
+    for (final id in perksTaken) {
+      final p = perkById(id);
+      if (p.effect == effect) product *= 1 - p.value;
+    }
+    return product;
   }
 
   bool hasPerk(PerkEffect effect) => perksTaken.any((id) => perkById(id).effect == effect);
@@ -203,7 +213,7 @@ class Battle {
 
   double get swingCooldownMax {
     final level = config.clubLevels[club.id] ?? 1;
-    return baseSwingCooldown * (1 - perkSum(PerkEffect.swingCooldown)) * (1 - 0.01 * (level - 1));
+    return baseSwingCooldown * perkProduct(PerkEffect.swingCooldown) * (1 - 0.01 * (level - 1));
   }
 
   double clubDamage(ClubSpec c) {
@@ -464,11 +474,35 @@ class Battle {
     if (phase != Phase.playing || swingCooldown > 0) return null;
     final s = swingFromDrag(dragDx, dragDy);
     if (s == null) return null;
-    var dir = s.direction;
-    final target = _nearestEnemy(teePosition, (e) => true);
-    if (target != null) dir = assistAim(dir, target.pos - teePosition, config.aimAssist);
     final sweet = isSweetSpot(phaseAtRelease, width: sweetSpotWidth);
-    return _swing(dir, s.power, sweet: sweet);
+    return _swing(_assistedDirection(s.direction), s.power, sweet: sweet);
+  }
+
+  bool _clubCanHit(ClubSpec c, Enemy e) => c.canHitFliers || !e.flier;
+
+  /// Aim-assisted direction, considering only enemies the current club can hit.
+  V2 _assistedDirection(V2 dir) {
+    final target = _nearestEnemy(teePosition, (e) => _clubCanHit(club, e));
+    return target == null ? dir : assistAim(dir, target.pos - teePosition, config.aimAssist);
+  }
+
+  /// Where a Wedge lob from [from] lands.
+  static double wedgeDistance(double power) => 120 + 360 * power;
+
+  static V2 lobTargetFor(V2 from, V2 dir, double power) {
+    final dist = wedgeDistance(power);
+    return V2((from.x + dir.x * dist).clamp(0, worldWidth).toDouble(), (from.y + dir.y * dist).clamp(0, worldHeight).toDouble());
+  }
+
+  /// The path the dotted aim preview draws for a drag, using the same assisted
+  /// direction and club rules as [releaseSwing]. Empty if the drag is not a swing.
+  List<V2> aimPreview(double dragDx, double dragDy) {
+    final s = swingFromDrag(dragDx, dragDy);
+    if (s == null) return const [];
+    final dir = _assistedDirection(s.direction);
+    if (club.kind == ClubKind.wedge) return [teePosition, lobTargetFor(teePosition, dir, s.power)];
+    final bounces = club.bounces + perkSum(PerkEffect.extraBounce).round() + (hasPerk(PerkEffect.bouncyBalls) ? 2 : 0);
+    return previewPath(teePosition, dir, 140 + 260 * s.power, worldWidth, maxBounces: bounces > 0 ? 1 : 0);
   }
 
   Ball _swing(V2 dir, double power, {required bool sweet, bool auto = false}) {
@@ -502,9 +536,8 @@ class Battle {
       free: free,
     );
     if (c.kind == ClubKind.wedge) {
-      final dist = 120 + 360 * power;
       ball.lobStart = from;
-      ball.lobTarget = V2((from.x + dir.x * dist).clamp(0, worldWidth).toDouble(), (from.y + dir.y * dist).clamp(0, worldHeight).toDouble());
+      ball.lobTarget = lobTargetFor(from, dir, power);
       ball.lobTotal = (ball.lobTarget!.distanceTo(from) / c.speed) + 0.35;
     }
     balls.add(ball);
@@ -592,6 +625,7 @@ class Battle {
     gas.removeWhere((g) => g.time <= 0);
     _updateTowers(dt);
     _updateEnemies(dt);
+    if (phase != Phase.playing) return;
     _updateBalls(dt);
     if (phase != Phase.playing) return;
 
@@ -663,10 +697,13 @@ class Battle {
   }
 
   void _autoSwing() {
-    final target = _nearestEnemy(teePosition, (e) => club.canHitFliers || !e.flier);
+    final target = _nearestEnemy(teePosition, (e) => _clubCanHit(club, e));
     if (target == null) return;
     final to = target.pos - teePosition;
-    final power = (to.length / 400).clamp(0.3, 1.0);
+    // Wedge lands at wedgeDistance(power), so invert that for lobs.
+    final power = club.kind == ClubKind.wedge
+        ? ((to.length - wedgeDistance(0)) / (wedgeDistance(1) - wedgeDistance(0))).clamp(0.0, 1.0)
+        : (to.length / 400).clamp(0.3, 1.0);
     _swing(to.normalized(), power, sweet: false, auto: true);
   }
 
@@ -702,6 +739,7 @@ class Battle {
 
   void _updateEnemies(double dt) {
     for (final e in List.of(enemies)) {
+      if (finished) return;
       if (!e.alive) continue;
       e.age += dt;
       e.hitFlash = math.max(0, e.hitFlash - dt);
@@ -828,6 +866,7 @@ class Battle {
   }
 
   void damageBase(double amount) {
+    if (finished) return;
     baseHp -= amount;
     shake = math.max(shake, 0.2);
     if (baseHp > 0) return;
@@ -864,7 +903,9 @@ class Battle {
     killsById[e.spec.id] = (killsById[e.spec.id] ?? 0) + 1;
     var reward = e.spec.coins * combo.coinMultiplier * (1 + perkSum(PerkEffect.coinGain));
     if (config.modifier == Modifier.glassClubhouse) reward *= 1.5;
-    _gainCoins(reward.round() + e.stolen);
+    _gainCoins(reward.round());
+    // Recovered coins go back to the purse but were never newly earned.
+    coins += e.stolen;
     fx.add(Fx(FxKind.gib, [e.pos], ttl: e.isBoss ? 1.2 : 0.7, radius: e.radius, colorValue: e.spec.colorValue));
     if (!_firstKillSaid) {
       _firstKillSaid = true;
@@ -1021,13 +1062,17 @@ class Battle {
         }
       }
       if (config.modifier == Modifier.windy) b.vel = b.vel + const V2(45, 0) * dt;
-      b.pos = b.pos + b.vel * dt;
-
-      _ballWalls(b);
-      if (b.done) continue;
-      _ballTowers(b);
-      if (b.done) continue;
-      _ballEnemies(b);
+      // Substeps of at most one ball radius so fast balls can't skip past contacts.
+      final steps = math.max(1, (b.vel.length * dt / math.max(2.0, b.radius)).ceil());
+      final step = dt / steps;
+      for (var i = 0; i < steps && !b.done; i++) {
+        b.pos = b.pos + b.vel * step;
+        _ballWalls(b);
+        if (b.done) break;
+        _ballTowers(b);
+        if (b.done) break;
+        _ballEnemies(b);
+      }
     }
   }
 

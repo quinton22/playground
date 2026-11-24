@@ -362,4 +362,91 @@ void main() {
     expect(b.kills, greaterThan(20));
     expect(perks.length, 20);
   });
+
+  group('review fixes', () {
+    test('recovered stolen coins are not counted as earned', () {
+      final b = quick(coins: 100);
+      final r = b.spawnEnemy('raccoon', SpawnEdge.top, at: V2(30, baseZone.top - 1));
+      runUntil(b, () => r.fleeing, seconds: 2);
+      final earnedBefore = b.coinsEarned;
+      b.damageEnemy(r, 1000);
+      // Kill reward only (5 coins at Bogey x1), not the 15 recovered.
+      expect(b.coinsEarned - earnedBefore, 5);
+      expect(b.coins, 105);
+    });
+
+    test('repeated cooldown perks never reach zero', () {
+      final b = quick(caddie: 'big_earl');
+      b.perksTaken.addAll(List.filled(10, 'quick_hands'));
+      b.perksTaken.addAll(List.filled(10, 'ace_caddie'));
+      expect(b.swingCooldownMax, greaterThan(0));
+      expect(b.caddieMaxCooldown, greaterThan(0));
+    });
+
+    test('aim assist ignores fliers the club cannot hit', () {
+      final b = Battle(RunConfig(mode: modeById(ModeId.quickRound), seed: 42, aimAssist: 1));
+      b.enemies.clear();
+      b.selectClub(2); // wedge
+      // A crow just right of straight up; nothing else on the board.
+      b.spawnEnemy('crow', SpawnEdge.top, at: const V2(220, 300));
+      final path = b.aimPreview(0, 100);
+      expect(path.last.x, closeTo(teePosition.x, 1e-6));
+      b.selectClub(0); // driver can hit fliers
+      expect(b.aimPreview(0, 100)[1].x, greaterThan(teePosition.x));
+    });
+
+    test('wedge preview ends where the lob lands', () {
+      final b = quick();
+      b.enemies.clear();
+      b.selectClub(2);
+      final preview = b.aimPreview(30, 160);
+      b.beginSwing();
+      final ball = b.releaseSwing(30, 160)!;
+      expect(preview.last, ball.lobTarget);
+    });
+
+    test('nothing changes after the last flag falls', () {
+      final b = quick(mode: ModeId.suddenDeath);
+      b.enemies.clear();
+      for (var i = 0; i < 3; i++) {
+        final e = b.spawnEnemy('gator', SpawnEdge.top, at: clubhouseBox.center);
+        e.age = 5;
+      }
+      b.baseHp = 1;
+      b.update(1 / 60);
+      expect(b.phase, Phase.lost);
+      expect(b.flags, 0);
+      final kills = b.kills;
+      b.update(1 / 60);
+      expect(b.kills, kills);
+    });
+
+    test('auto-caddie wedge lobs land on the target', () {
+      final b = Battle(RunConfig(mode: modeById(ModeId.quickRound), seed: 3, autoCaddie: true, aimAssist: 0));
+      b.enemies.clear();
+      b.selectClub(2);
+      final target = b.spawnEnemy('gator', SpawnEdge.top, at: teePosition - const V2(0, 200));
+      target.age = 0; // surfacing: nearly still
+      b.update(1 / 60);
+      final ball = b.balls.single;
+      expect(ball.lobTarget!.distanceTo(target.pos), lessThan(ball.club.blastRadius));
+    });
+
+    test('fast balls do not tunnel through enemies at large timesteps', () {
+      final b = quick();
+      b.enemies.clear();
+      // Between two 45-unit steps of a full-power driver (y 500 and 455).
+      final goose = b.spawnEnemy('goose', SpawnEdge.top, at: const V2(180, 478));
+      goose
+        ..abilityTimer = 99
+        ..slowTimer = 99
+        ..slowAmount = 1; // hold it still
+      b.beginSwing();
+      b.releaseSwing(0, 1000); // full-power driver
+      for (var i = 0; i < 20 && goose.alive; i++) {
+        b.update(0.05);
+      }
+      expect(goose.alive, isFalse);
+    });
+  });
 }

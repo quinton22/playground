@@ -332,8 +332,14 @@ class ForeGame extends FlameGame {
     final a = -math.pi / 2 + battle.ringPhaseNow * 2 * math.pi;
     canvas.drawCircle(Offset(teePosition.x + math.cos(a) * ringR, teePosition.y + math.sin(a) * ringR), 4.5, Paint()..color = const Color(0xFFFFFFFF));
     if (swing == null) return;
-    final len = 140 + 260 * swing.power;
-    final path = previewPath(teePosition, swing.direction, len, worldWidth, maxBounces: battle.club.bounces > 0 ? 1 : 0);
+    final path = battle.aimPreview(drag.x, drag.y);
+    if (path.isEmpty) return;
+    if (battle.club.blastRadius > 0) {
+      canvas.drawCircle(_o(path.last), battle.club.blastRadius, Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = const Color(0x99FFFFFF));
+    }
     final dot = Paint()..color = battle.swingCooldown > 0 ? const Color(0x66FFFFFF) : const Color(0xDDFFFFFF);
     for (var i = 0; i < path.length - 1; i++) {
       final a0 = path[i], a1 = path[i + 1];

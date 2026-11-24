@@ -55,9 +55,11 @@ class _RunScreenState extends State<RunScreen> {
     final result = battle.result();
     final daily = widget.config.mode.id == ModeId.dailyTournament ? widget.config.seed : null;
     final rewards = widget.store.update((p) => applyRun(p, result, dailySeedUsed: daily));
-    Navigator.of(context).pushReplacement(MaterialPageRoute(
-      builder: (_) => ResultsScreen(store: widget.store, result: result, rewards: rewards, config: widget.config),
-    ));
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ResultsScreen(store: widget.store, result: result, rewards: rewards, config: widget.config),
+      ),
+    );
   }
 
   void _quit() {
@@ -117,20 +119,36 @@ class _RunScreenState extends State<RunScreen> {
                   children: [
                     child!,
                     if (battle.comment != null || battle.hint != null)
-                      Positioned(top: 8, left: 12, right: 12, child: _Ticker(comment: battle.comment, hint: battle.hint)),
-                    if (battle.phase == Phase.drafting) Positioned.fill(child: _DraftPanel(battle: battle, onChanged: () => setState(() {}))),
+                      Positioned(
+                        top: 8,
+                        left: 12,
+                        right: 12,
+                        child: _Ticker(comment: battle.comment, hint: battle.hint),
+                      ),
+                    if (battle.phase == Phase.drafting)
+                      Positioned.fill(
+                        child: _DraftPanel(battle: battle, onChanged: () => setState(() {})),
+                      ),
                     if (game.selectedPlot != null && battle.canBuild)
                       Positioned(
                         left: 8,
                         right: 8,
+                        top: 8,
                         bottom: 8,
-                        child: _TowerSheet(
-                          battle: battle,
-                          plot: game.selectedPlot!,
-                          onClose: () => setState(() => game.selectedPlot = null),
+                        // Bounded by the board; the sheet scrolls if it is taller.
+                        child: Align(
+                          alignment: Alignment.bottomCenter,
+                          child: _TowerSheet(
+                            battle: battle,
+                            plot: game.selectedPlot!,
+                            onClose: () => setState(() => game.selectedPlot = null),
+                          ),
                         ),
                       ),
-                    if (_paused) Positioned.fill(child: _PauseMenu(onResume: _resume, onQuit: _quit)),
+                    if (_paused)
+                      Positioned.fill(
+                        child: _PauseMenu(onResume: _resume, onQuit: _quit),
+                      ),
                   ],
                 ),
               ),
@@ -197,22 +215,26 @@ class _TopBar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Hole ${battle.holeIndex + 1}/$total'
-                      '${battle.hole.breather ? '  (breather)' : ''}'
-                      '  Par ${battle.hole.par.round()}s  ${battle.holeTime.floor()}s'),
+                  Text(
+                    'Hole ${battle.holeIndex + 1}/$total'
+                    '${battle.hole.breather ? '  (breather)' : ''}'
+                    '  Par ${battle.hole.par.round()}s  ${battle.holeTime.floor()}s',
+                  ),
                   const SizedBox(height: 4),
-                  Row(children: [
-                    Text('🚩' * battle.flags),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: LinearProgressIndicator(
-                        value: hpFrac,
-                        minHeight: 6,
-                        color: hpFrac > 0.4 ? Colors.lightGreenAccent : Colors.redAccent,
-                        backgroundColor: Colors.black45,
+                  Row(
+                    children: [
+                      Text('🚩' * battle.flags),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: LinearProgressIndicator(
+                          value: hpFrac,
+                          minHeight: 6,
+                          color: hpFrac > 0.4 ? Colors.lightGreenAccent : Colors.redAccent,
+                          backgroundColor: Colors.black45,
+                        ),
                       ),
-                    ),
-                  ]),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -221,11 +243,16 @@ class _TopBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text('🪙 ${battle.coins}'),
-                Text('${battle.combo.name} x${battle.combo.coinMultiplier}',
-                    style: TextStyle(color: battle.combo.rung >= 2 ? Colors.yellowAccent : Colors.white70, fontSize: 12)),
+                Text(
+                  '${battle.combo.name} x${battle.combo.coinMultiplier}',
+                  style: TextStyle(color: battle.combo.rung >= 2 ? Colors.yellowAccent : Colors.white70, fontSize: 12),
+                ),
               ],
             ),
-            IconButton(onPressed: onPause, icon: const Icon(Icons.pause, color: Colors.white)),
+            IconButton(
+              onPressed: onPause,
+              icon: const Icon(Icons.pause, color: Colors.white),
+            ),
           ],
         ),
       ),
@@ -248,7 +275,11 @@ class _Ticker extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(color: Colors.amber.shade700, borderRadius: BorderRadius.circular(8)),
-              child: Text(hint!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: Text(
+                hint!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
           if (comment != null)
             Padding(
@@ -358,12 +389,7 @@ class _RoundButton extends StatelessWidget {
             SizedBox(
               width: size,
               height: size,
-              child: CircularProgressIndicator(
-                value: fill.clamp(0.0, 1.0),
-                strokeWidth: 5,
-                color: color,
-                backgroundColor: Colors.black38,
-              ),
+              child: CircularProgressIndicator(value: fill.clamp(0.0, 1.0), strokeWidth: 5, color: color, backgroundColor: Colors.black38),
             ),
             Container(
               width: size - 12,
@@ -400,52 +426,62 @@ class _DraftPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xCC000000),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text('Hole ${battle.holeIndex + 1} cleared!', style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          const Text('Mulligan card: pick 1 of 3', style: TextStyle(color: Colors.white70)),
-          const SizedBox(height: 16),
-          for (var i = 0; i < battle.draftOffer.length; i++)
-            Card(
-              color: const Color(0xFF263238),
-              shape: RoundedRectangleBorder(
-                side: BorderSide(color: rarityColors[battle.draftOffer[i].rarity]!, width: 2),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: ListTile(
-                title: Text(battle.draftOffer[i].name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                  '${battle.draftOffer[i].description}\n${battle.draftOffer[i].rarity.name} · ${battle.draftOffer[i].set.name} set',
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                isThreeLine: true,
-                onTap: () {
-                  battle.pickPerk(i);
-                  onChanged();
-                },
-              ),
-            ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: battle.rerollsLeft > 0
-                ? () {
-                    battle.reroll();
-                    onChanged();
-                  }
-                : null,
-            icon: const Icon(Icons.refresh),
-            label: Text('Reroll (${battle.rerollsLeft} free)'),
-          ),
-          if (battle.perksTaken.isNotEmpty)
+      alignment: Alignment.center,
+      // Scrolls when the perk history or large text outgrows the board.
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
             Text(
-              'Your perks: ${battle.perksTaken.map((id) => perkById(id).name).join(', ')}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
+              'Hole ${battle.holeIndex + 1} cleared!',
+              style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
             ),
-        ],
+            const SizedBox(height: 4),
+            const Text('Mulligan card: pick 1 of 3', style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 16),
+            for (var i = 0; i < battle.draftOffer.length; i++)
+              Card(
+                color: const Color(0xFF263238),
+                shape: RoundedRectangleBorder(
+                  side: BorderSide(color: rarityColors[battle.draftOffer[i].rarity]!, width: 2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: ListTile(
+                  title: Text(
+                    battle.draftOffer[i].name,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    '${battle.draftOffer[i].description}\n${battle.draftOffer[i].rarity.name} · ${battle.draftOffer[i].set.name} set',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  isThreeLine: true,
+                  onTap: () {
+                    battle.pickPerk(i);
+                    onChanged();
+                  },
+                ),
+              ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: battle.rerollsLeft > 0
+                  ? () {
+                      battle.reroll();
+                      onChanged();
+                    }
+                  : null,
+              icon: const Icon(Icons.refresh),
+              label: Text('Reroll (${battle.rerollsLeft} free)'),
+            ),
+            if (battle.perksTaken.isNotEmpty)
+              Text(
+                'Your perks: ${battle.perksTaken.map((id) => perkById(id).name).join(', ')}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -467,10 +503,7 @@ class _BuildBar extends StatelessWidget {
         child: Row(
           children: [
             const Expanded(
-              child: Text(
-                'Build phase: tap a plot to place, upgrade or sell towers.',
-                style: TextStyle(color: Colors.white),
-              ),
+              child: Text('Build phase: tap a plot to place, upgrade or sell towers.', style: TextStyle(color: Colors.white)),
             ),
             FilledButton(onPressed: onTeeOff, child: Text('Tee Off: hole ${battle.holeIndex + 2}')),
           ],
@@ -493,7 +526,7 @@ class _TowerSheet extends StatelessWidget {
     final live = battle.phase == Phase.playing;
     return Card(
       color: const Color(0xF0263238),
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(10),
         child: DefaultTextStyle(
           style: const TextStyle(color: Colors.white),
@@ -501,16 +534,21 @@ class _TowerSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(children: [
-                Expanded(
-                  child: Text(
-                    tower == null ? 'Empty plot' : '${tower.spec.name}  (level ${tower.level})',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      tower == null ? 'Empty plot' : '${tower.spec.name}  (level ${tower.level})',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    ),
                   ),
-                ),
-                Text('🪙 ${battle.coins}'),
-                IconButton(onPressed: onClose, icon: const Icon(Icons.close, color: Colors.white)),
-              ]),
+                  Text('🪙 ${battle.coins}'),
+                  IconButton(
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ],
+              ),
               if (live) const Text('Live build: double cost, 2 s slow-motion.', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
               if (tower == null) ..._placeOptions(context) else ..._towerOptions(tower),
             ],
@@ -521,27 +559,33 @@ class _TowerSheet extends StatelessWidget {
   }
 
   List<Widget> _placeOptions(BuildContext context) => [
-        for (final spec in towers)
-          ListTile(
-            dense: true,
-            leading: CircleAvatar(backgroundColor: Color(spec.colorValue), child: Text(spec.badge, style: const TextStyle(fontSize: 12))),
-            title: Text(spec.name, style: const TextStyle(color: Colors.white)),
-            subtitle: Text('${spec.role}. ${spec.synergy}.', style: const TextStyle(color: Colors.white60, fontSize: 12)),
-            trailing: Text('🪙 ${battle.placeCost(spec)}',
-                style: TextStyle(color: battle.coins >= battle.placeCost(spec) ? Colors.white : Colors.white38)),
-            enabled: battle.coins >= battle.placeCost(spec),
-            onTap: () {
-              if (battle.placeTower(spec.id, plot.$1, plot.$2)) onClose();
-            },
-          ),
-      ];
+    for (final spec in towers)
+      ListTile(
+        dense: true,
+        leading: CircleAvatar(
+          backgroundColor: Color(spec.colorValue),
+          child: Text(spec.badge, style: const TextStyle(fontSize: 12)),
+        ),
+        title: Text(spec.name, style: const TextStyle(color: Colors.white)),
+        subtitle: Text('${spec.role}. ${spec.synergy}.', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+        trailing: Text(
+          '🪙 ${battle.placeCost(spec)}',
+          style: TextStyle(color: battle.coins >= battle.placeCost(spec) ? Colors.white : Colors.white38),
+        ),
+        enabled: battle.coins >= battle.placeCost(spec),
+        onTap: () {
+          if (battle.placeTower(spec.id, plot.$1, plot.$2)) onClose();
+        },
+      ),
+  ];
 
   List<Widget> _towerOptions(Tower tower) {
     final canUp = tower.level < maxTowerLevel;
     final price = battle.upgradePrice(tower);
     return [
       Text('${tower.spec.role}. ${tower.spec.synergy}.', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-      if (battle.hasPair(tower)) const Text('Pair bonus active: +2 chain jumps.', style: TextStyle(color: Colors.yellowAccent, fontSize: 12)),
+      if (battle.hasPair(tower))
+        const Text('Pair bonus active: +2 chain jumps.', style: TextStyle(color: Colors.yellowAccent, fontSize: 12)),
       const SizedBox(height: 8),
       Row(
         children: [
@@ -586,13 +630,19 @@ class _PauseMenu extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('Paused', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          const Text(
+            'Paused',
+            style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           Text('Combo rungs: ${ComboLadder.rungNames.join(' → ')}', style: const TextStyle(color: Colors.white60, fontSize: 12)),
           const SizedBox(height: 20),
           FilledButton(onPressed: onResume, child: const Text('Resume')),
           const SizedBox(height: 8),
-          TextButton(onPressed: onQuit, child: const Text('Concede round', style: TextStyle(color: Colors.white70))),
+          TextButton(
+            onPressed: onQuit,
+            child: const Text('Concede round', style: TextStyle(color: Colors.white70)),
+          ),
         ],
       ),
     );
