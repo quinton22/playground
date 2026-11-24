@@ -34,4 +34,4 @@ flutter run
 
 ## CI build
 
-`.github/workflows/fore-last-stand-build.yml` (at the repo root, as GitHub requires) runs analyze + test + build. Trigger it from the **Actions** tab → *fore-last-stand build* → *Run workflow*, choosing `apk`, `appbundle` or `ios`. It also runs on pushes/PRs that touch `fore-last-stand/`. Android outputs are uploaded as artifacts; iOS is built with `--no-codesign`.
+`.github/workflows/fore-last-stand-build.yml` (at the repo root, as GitHub requires) runs analyze + test + build. Trigger it from the **Actions** tab → *fore-last-stand build* → *Run workflow*, choosing `apk`, `appbundle` or `ios`. It also runs automatically when a PR that touches `fore-last-stand/` is merged to `main`; open PRs don't trigger it. Android outputs are uploaded as artifacts; iOS is built with `--no-codesign`.
